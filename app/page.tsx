@@ -1,13 +1,23 @@
 import Link from "next/link";
 import { getOverview } from "@/lib/queries";
 import { getRecapYears } from "@/lib/recap";
+import { getSurprises } from "@/lib/surprises";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatDistanceToNow } from "date-fns";
-import { Sparkles } from "lucide-react";
+import { Sparkles, TrendingUp, TrendingDown, UserPlus, Activity, Trophy, ArrowUpRight } from "lucide-react";
 import { ActivityChart } from "@/components/charts/activity-chart";
 import { TopDomainsBar } from "@/components/charts/top-domains-bar";
 import { MsgTypeList } from "@/components/charts/msg-type-list";
+
+const SURPRISE_ICONS = {
+  spike: TrendingUp,
+  "quiet-streak": TrendingDown,
+  "fresh-contact": UserPlus,
+  "favorite-shift": Activity,
+  milestone: Trophy,
+  "new-domain": ArrowUpRight,
+} as const;
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +30,7 @@ export default async function Page() {
   const lastIndexed = o.lastIndexedAt ? new Date(Number(o.lastIndexedAt)) : null;
   const years = getRecapYears();
   const latestYear = years[0] ?? null;
+  const surprises = getSurprises();
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-8">
@@ -107,6 +118,46 @@ export default async function Page() {
           </CardContent>
         </Card>
       </section>
+
+      {surprises.length > 0 && (
+        <section>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Sparkles className="size-4 text-primary" /> Surprises
+              </CardTitle>
+              <CardDescription>
+                Anomalies and patterns in the last few weeks, vs your usual baseline.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {surprises.map((s, i) => {
+                  const Icon = SURPRISE_ICONS[s.kind] ?? Sparkles;
+                  const body = (
+                    <div className="h-full rounded-md border border-border/40 px-3 py-2.5 hover:border-primary/40 transition-colors">
+                      <div className="flex items-start gap-2">
+                        <Icon className="size-3.5 text-primary mt-0.5 shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium leading-tight">{s.title}</p>
+                          <p className="text-xs text-muted-foreground mt-1 leading-snug">
+                            {s.body}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                  return (
+                    <div key={`${s.kind}-${i}`}>
+                      {s.href ? <Link href={s.href}>{body}</Link> : body}
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        </section>
+      )}
 
       <section className="grid gap-6">
         <Card>
