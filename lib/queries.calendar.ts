@@ -1,0 +1,442 @@
+/**
+ * Calendar-specific read queries: day-detail, on-this-day, hourly histograms,
+ * TF-IDF keyword extraction. Shared with the Recap (Phase F) pages.
+ *
+ * All queries pre-filter via EXCLUDED_SUBQUERY so archived / official /
+ * folded sessions don't bleed into "personal" analytics.
+ */
+import { getDb } from "./db";
+import { EXCLUDED_SUBQUERY, getMeHandles } from "./queries";
+import { tokenize, tfidfAgainst, type ScoredWord } from "./text";
+
+export interface ChatGroup {
+  chat_username: string | null;
+  chat_display: string;
+  chat_type: string | null;
+  n: number;
+  last_ts: number;
+  sample: {
+    id: number;
+    sender: string;
+    msg_type: string;
+    content: string;
+    timestamp: number;
+  }[];
+}
+
+export interface DayKeywordResult {
+  words: ScoredWord[];
+  subsetSize: number;
+  baselineSize: number;
+}
+
+export interface OnThisDayYear {
+  year: number;
+  day: string;
+  total: number;
+  samples: {
+    chat_display: string;
+    chat_username: string | null;
+    sender: string;
+    content: string;
+    timestamp: number;
+  }[];
+}
+
+export interface HourlyBucket {
+  hour: number;
+  n: number;
+}
+
+/**
+ * Convert a YYYY-MM-DD local-time day string into a [startSec, endSec) unix range.
+ */
+function dayBounds(day: string): { startSec: number; endSec: number } {
+  const startMs = new Date(`${day}T00:00:00`).getTime();
+  const startSec = Math.floor(startMs / 1000);
+  return { startSec, endSec: startSec + 86400 };
+}
+
+/**
+ * Convert a calendar year to a [startSec, endSec) unix range in local time.
+ * Used to swap `strftime('%Y', ...)` full-table scans for index-friendly
+ * range scans on the `idx_messages_ts` index.
+ */
+function yearBounds(year: number): { startSec: number; endSec: number } {
+  const startSec = Math.floor(new Date(year, 0, 1, 0, 0, 0, 0).getTime() / 1000);
+  const endSec = Math.floor(new Date(year + 1, 0, 1, 0, 0, 0, 0).getTime() / 1000);
+  return { startSec, endSec };
+}
+
+/**
+ * One row per chat that had messages on `day`, sorted by message count desc,
+ * plus up to 8 latest sample messages per chat.
+ */
+export function getDayMessagesGrouped(day: string): ChatGroup[] {
+  const db = getDb();
+  const { startSec, endSec } = dayBounds(day);
+
+  // First: aggregate per-chat counts.
+  const groups = db
+    .prepare(
+      `SELECT
+         m.chat_username AS chat_username,
+         m.chat_display AS chat_display,
+         (SELECT chat_type FROM sessions WHERE username = m.chat_username) AS chat_type,
+         COUNT(*) AS n,
+         MAX(m.timestamp) AS last_ts
+       FROM messages m
+       WHERE m.timestamp >= ? AND m.timestamp < ?
+         AND (m.chat_username IS NULL OR m.chat_username NOT IN ${EXCLUDED_SUBQUERY})
+       GROUP BY m.chat_username, m.chat_display
+       ORDER BY n DESC, last_ts DESC
+       LIMIT 200`,
+    )
+    .all(startSec, endSec) as Omit<ChatGroup, "sample">[];
+
+  if (groups.length === 0) return [];
+
+  // Then: pull up to 8 latest messages per (chat_username, chat_display) pair.
+  // We use one prepared statement per group; with usually <50 chats per day this
+  // stays under our perf budget and avoids a complex window-function query.
+  const sampleStmt = db.prepare(
+    `SELECT id, sender, msg_type, content, timestamp
+     FROM messages
+     WHERE timestamp >= ? AND timestamp < ?
+       AND chat_display = ?
+       AND (
+         (? IS NULL AND chat_username IS NULL) OR chat_username = ?
+       )
+     ORDER BY timestamp DESC
+     LIMIT 8`,
+  );
+
+  return groups.map((g) => ({
+    ...g,
+    sample: sampleStmt.all(
+      startSec,
+      endSec,
+      g.chat_display,
+      g.chat_username,
+      g.chat_username,
+    ) as ChatGroup["sample"],
+  }));
+}
+
+/**
+ * 24-bucket hour histogram for a single day (post-exclusion).
+ */
+export function getDayHourly(day: string): HourlyBucket[] {
+  const db = getDb();
+  const { startSec, endSec } = dayBounds(day);
+  const rows = db
+    .prepare(
+      `SELECT CAST(strftime('%H', timestamp, 'unixepoch', 'localtime') AS INTEGER) AS hour,
+              COUNT(*) AS n
+       FROM messages
+       WHERE timestamp >= ? AND timestamp < ?
+         AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
+       GROUP BY hour
+       ORDER BY hour`,
+    )
+    .all(startSec, endSec) as HourlyBucket[];
+  const filled: HourlyBucket[] = [];
+  const map = new Map(rows.map((r) => [r.hour, r.n]));
+  for (let h = 0; h < 24; h++) filled.push({ hour: h, n: map.get(h) ?? 0 });
+  return filled;
+}
+
+/**
+ * Pull every text-message content string in the [startSec, endSec) window.
+ */
+function pullTextContent(startSec: number, endSec: number): string[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT content FROM messages
+       WHERE timestamp >= ? AND timestamp < ?
+         AND msg_type = '文本'
+         AND content != ''
+         AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+    )
+    .all(startSec, endSec) as { content: string }[];
+  return rows.map((r) => r.content);
+}
+
+/**
+ * Sampled text-message baseline over the trailing 365 days, taking every 50th
+ * row by timestamp parity. Caps roughly at ~10–20k rows out of 600k+, keeping
+ * tokenization well under the 2s perf budget.
+ *
+ * We cache the baseline by trailing-window anchor so repeated day lookups
+ * within the same dev session don't re-tokenize 10k rows.
+ */
+const baselineCache = new Map<string, Map<string, number>>();
+
+function getSampledBaselineMap(anchorSec: number): Map<string, number> {
+  const key = `b:${Math.floor(anchorSec / 86400)}`;
+  const cached = baselineCache.get(key);
+  if (cached) return cached;
+
+  const db = getDb();
+  const fromSec = anchorSec - 365 * 86400;
+  const rows = db
+    .prepare(
+      `SELECT content FROM messages
+       WHERE timestamp >= ? AND timestamp < ?
+         AND msg_type = '文本'
+         AND content != ''
+         AND (timestamp % 50) = 0
+         AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+    )
+    .all(fromSec, anchorSec) as { content: string }[];
+
+  const map = new Map<string, number>();
+  for (const r of rows) {
+    for (const t of tokenize(r.content)) {
+      map.set(t, (map.get(t) ?? 0) + 1);
+    }
+  }
+  // Single-entry cache: drop older keys.
+  baselineCache.clear();
+  baselineCache.set(key, map);
+  return map;
+}
+
+/**
+ * Top-30 TF-IDF terms scoring `day`'s text against a sampled 365-day baseline.
+ */
+export function getDayKeywords(day: string, _year: number): DayKeywordResult {
+  const { startSec, endSec } = dayBounds(day);
+  const docs = pullTextContent(startSec, endSec);
+  const subset = new Map<string, number>();
+  for (const d of docs) {
+    for (const t of tokenize(d)) subset.set(t, (subset.get(t) ?? 0) + 1);
+  }
+  // Use end-of-day as the trailing-baseline anchor.
+  const baseline = getSampledBaselineMap(endSec);
+  const words = tfidfAgainst(subset, baseline, { top: 30, min: 2 });
+  return {
+    words,
+    subsetSize: docs.length,
+    baselineSize: Array.from(baseline.values()).reduce((a, b) => a + b, 0),
+  };
+}
+
+/**
+ * Top-30 TF-IDF terms for an entire year vs a global baseline. The baseline is
+ * the sampled all-time corpus (every 50th text message); the subset is the
+ * year's text-message tokens (also sampled when the year is huge — we cap the
+ * subset at a few thousand messages by hashing on timestamp parity so we stay
+ * fast on ~400k-row years).
+ */
+export function getYearKeywords(year: number): DayKeywordResult {
+  const db = getDb();
+  const { startSec, endSec } = yearBounds(year);
+  // Sample roughly every 10th message inside the year. For a 400k-row year that
+  // yields ~40k content strings — still fast (~300ms tokenize) but plenty of
+  // signal.
+  const docs = db
+    .prepare(
+      `SELECT content FROM messages
+       WHERE timestamp >= ? AND timestamp < ?
+         AND msg_type = '文本'
+         AND content != ''
+         AND (timestamp % 10) = 0
+         AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+    )
+    .all(startSec, endSec) as { content: string }[];
+
+  const subset = new Map<string, number>();
+  for (const d of docs) {
+    for (const t of tokenize(d.content)) subset.set(t, (subset.get(t) ?? 0) + 1);
+  }
+  // All-time sampled baseline.
+  const baseline = getAllTimeBaselineMap();
+  const words = tfidfAgainst(subset, baseline, { top: 30, min: 5 });
+  return {
+    words,
+    subsetSize: docs.length,
+    baselineSize: Array.from(baseline.values()).reduce((a, b) => a + b, 0),
+  };
+}
+
+let _allTimeBaseline: Map<string, number> | null = null;
+function getAllTimeBaselineMap(): Map<string, number> {
+  if (_allTimeBaseline) return _allTimeBaseline;
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT content FROM messages
+       WHERE msg_type = '文本'
+         AND content != ''
+         AND (timestamp % 50) = 0
+         AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+    )
+    .all() as { content: string }[];
+  const map = new Map<string, number>();
+  for (const r of rows) {
+    for (const t of tokenize(r.content)) {
+      map.set(t, (map.get(t) ?? 0) + 1);
+    }
+  }
+  _allTimeBaseline = map;
+  return map;
+}
+
+/**
+ * For the same MM-DD in years before `currentYear`, return per-year totals and
+ * up to 4 sample messages. Only years that actually have data on that MM-DD
+ * are returned.
+ */
+export function getOnThisDay(monthDay: string, currentYear: number, limit = 6): OnThisDayYear[] {
+  // monthDay = "MM-DD" — sanity-validate so we never interpolate user input.
+  if (!/^\d{2}-\d{2}$/.test(monthDay)) return [];
+  // We already know which years have data — iterate only those, build the
+  // candidate day directly, and probe each via index-friendly range scans
+  // rather than another `strftime` full-table aggregation.
+  const candidates = getCoveredYears();
+
+  const out: OnThisDayYear[] = [];
+  for (const year of candidates) {
+    if (year >= currentYear) continue;
+    if (out.length >= limit) break;
+    const day = `${year}-${monthDay}`;
+    const { startSec, endSec } = dayBounds(day);
+    const total = (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM messages
+           WHERE timestamp >= ? AND timestamp < ?
+             AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+        )
+        .get(startSec, endSec) as { n: number }
+    ).n;
+    if (total === 0) continue;
+    const samples = db
+      .prepare(
+        `SELECT m.chat_display, m.chat_username, m.sender, m.content, m.timestamp
+         FROM messages m
+         WHERE m.timestamp >= ? AND m.timestamp < ?
+           AND m.msg_type IN ('文本')
+           AND m.content != ''
+           AND m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
+         ORDER BY m.timestamp DESC
+         LIMIT 4`,
+      )
+      .all(startSec, endSec) as OnThisDayYear["samples"];
+    out.push({ year, day, total, samples });
+  }
+  return out;
+}
+
+/**
+ * Distinct years that have at least one message post-exclusion. Cached on
+ * first call; the dev server can pick up new years after a fresh deep index by
+ * importing this module again (auto on file change).
+ */
+let _coveredYears: number[] | null = null;
+export function getCoveredYears(): number[] {
+  if (_coveredYears) return _coveredYears;
+  const db = getDb();
+  // Use min/max timestamp + iterate candidate years rather than a strftime
+  // GROUP BY which forces a full-table scan. With min/max from the index we
+  // get the bounds in O(log n) and only probe O(years) range queries.
+  const bounds = db
+    .prepare(
+      `SELECT MIN(timestamp) AS lo, MAX(timestamp) AS hi FROM messages
+       WHERE chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+    )
+    .get() as { lo: number | null; hi: number | null };
+  if (!bounds.lo || !bounds.hi) {
+    _coveredYears = [];
+    return _coveredYears;
+  }
+  const loYear = new Date(bounds.lo * 1000).getFullYear();
+  const hiYear = new Date(bounds.hi * 1000).getFullYear();
+  const probe = db.prepare(
+    `SELECT 1 FROM messages
+     WHERE timestamp >= ? AND timestamp < ?
+       AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
+     LIMIT 1`,
+  );
+  const out: number[] = [];
+  for (let y = hiYear; y >= loYear; y--) {
+    const { startSec, endSec } = yearBounds(y);
+    if (probe.get(startSec, endSec)) out.push(y);
+  }
+  _coveredYears = out;
+  return _coveredYears;
+}
+
+export interface YearSummary {
+  total: number;
+  busiestDay: { day: string; n: number } | null;
+  uniqueChats: number;
+  myMessages: number;
+  myShare: number; // 0..1
+}
+
+/**
+ * Cheap summary statistics for the year switcher header.
+ */
+export function getYearSummary(year: number): YearSummary {
+  const db = getDb();
+  const yearStr = String(year);
+
+  const total = (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM messages
+         WHERE strftime('%Y', timestamp, 'unixepoch', 'localtime') = ?
+           AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+      )
+      .get(yearStr) as { n: number }
+  ).n;
+
+  const busiestRow = db
+    .prepare(
+      `SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch', 'localtime') AS day, COUNT(*) AS n
+       FROM messages
+       WHERE strftime('%Y', timestamp, 'unixepoch', 'localtime') = ?
+         AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
+       GROUP BY day
+       ORDER BY n DESC
+       LIMIT 1`,
+    )
+    .get(yearStr) as { day: string; n: number } | undefined;
+
+  const uniqueChats = (
+    db
+      .prepare(
+        `SELECT COUNT(DISTINCT chat_display) AS n FROM messages
+         WHERE strftime('%Y', timestamp, 'unixepoch', 'localtime') = ?
+           AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+      )
+      .get(yearStr) as { n: number }
+  ).n;
+
+  const me = getMeHandles();
+  let myMessages = 0;
+  if (me.length > 0) {
+    const placeholders = me.map(() => "?").join(",");
+    myMessages = (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM messages
+           WHERE strftime('%Y', timestamp, 'unixepoch', 'localtime') = ?
+             AND sender IN (${placeholders})
+             AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+        )
+        .get(yearStr, ...me) as { n: number }
+    ).n;
+  }
+
+  return {
+    total,
+    busiestDay: busiestRow ?? null,
+    uniqueChats,
+    myMessages,
+    myShare: total > 0 ? myMessages / total : 0,
+  };
+}

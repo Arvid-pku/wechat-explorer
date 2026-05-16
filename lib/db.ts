@@ -147,6 +147,20 @@ function applyMigrations(db: DB) {
   db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_archived ON sessions(archived)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_urls_chat_username ON urls(chat_username) WHERE chat_username IS NOT NULL");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_chat_username ON messages(chat_username) WHERE chat_username IS NOT NULL");
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS group_members (
+      group_username TEXT NOT NULL,
+      member_username TEXT NOT NULL,
+      member_display TEXT,
+      group_nickname TEXT,
+      is_owner INTEGER NOT NULL DEFAULT 0,
+      indexed_at INTEGER NOT NULL,
+      PRIMARY KEY (group_username, member_username)
+    );
+    CREATE INDEX IF NOT EXISTS idx_group_members_member ON group_members(member_username);
+    CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_username);
+  `);
 }
 
 export function setMeta(key: string, value: string) {

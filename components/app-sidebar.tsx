@@ -9,6 +9,7 @@ import {
   Search,
   CalendarDays,
   BookOpen,
+  Network,
   Settings,
   Command as CommandIcon,
   Sparkles,
@@ -23,6 +24,7 @@ const NAV_ITEMS = [
   { href: "/search", label: "Search", icon: Search },
   { href: "/calendar", label: "Calendar", icon: CalendarDays },
   { href: "/reading", label: "Reading queue", icon: BookOpen },
+  { href: "/graph", label: "Graph", icon: Network },
 ];
 
 const FOOTER_ITEMS = [

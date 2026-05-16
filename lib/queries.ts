@@ -133,6 +133,69 @@ export function setMemberCount(username: string, count: number) {
   );
 }
 
+/**
+ * Active (non-archived) groups whose membership has not been recorded yet — either
+ * because `member_count` is NULL or there are zero rows in `group_members` for them.
+ * Used by the batch backfill endpoint.
+ */
+export function listGroupsNeedingMembers(): { username: string; display_name: string }[] {
+  const db = getDb();
+  return db
+    .prepare(
+      `SELECT s.username, s.display_name
+       FROM sessions s
+       WHERE s.chat_type = 'group'
+         AND s.archived = 0
+         AND (
+           s.member_count IS NULL
+           OR NOT EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_username = s.username)
+         )
+       ORDER BY s.last_timestamp DESC NULLS LAST`,
+    )
+    .all() as { username: string; display_name: string }[];
+}
+
+export interface RawMemberLike {
+  username: string;
+  display: string;
+  contact_display?: string;
+  group_nickname?: string;
+  is_owner?: boolean;
+}
+
+/**
+ * Insert (or refresh) all members for a group. Idempotent — uses INSERT OR REPLACE
+ * so a re-fetch updates display name / owner flag without duplicating rows.
+ */
+export function upsertGroupMembers(groupUsername: string, members: RawMemberLike[]) {
+  if (members.length === 0) return 0;
+  const db = getDb();
+  const stmt = db.prepare(
+    `INSERT INTO group_members
+       (group_username, member_username, member_display, group_nickname, is_owner, indexed_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(group_username, member_username) DO UPDATE SET
+       member_display = excluded.member_display,
+       group_nickname = excluded.group_nickname,
+       is_owner = excluded.is_owner,
+       indexed_at = excluded.indexed_at`,
+  );
+  const now = Date.now();
+  let n = 0;
+  const tx = db.transaction(() => {
+    for (const m of members) {
+      if (!m.username) continue;
+      const display = m.contact_display || m.display || null;
+      const nickname = m.group_nickname || null;
+      const owner = m.is_owner ? 1 : 0;
+      const r = stmt.run(groupUsername, m.username, display, nickname, owner, now);
+      n += r.changes;
+    }
+  });
+  tx();
+  return n;
+}
+
 export interface Overview {
   sessions: { total: number; private: number; group: number; official: number; folded: number };
   messages: { total: number; last7d: number; last30d: number; last365d: number };
