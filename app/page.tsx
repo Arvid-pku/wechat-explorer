@@ -1,65 +1,113 @@
-import Image from "next/image";
+import { getOverview } from "@/lib/queries";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { formatDistanceToNow } from "date-fns";
+import { ActivityChart } from "@/components/charts/activity-chart";
+import { TopDomainsBar } from "@/components/charts/top-domains-bar";
+import { MsgTypeList } from "@/components/charts/msg-type-list";
 
-export default function Home() {
+export const dynamic = "force-dynamic";
+
+function fmtNum(n: number) {
+  return new Intl.NumberFormat("en").format(n);
+}
+
+export default async function Page() {
+  const o = getOverview();
+  const lastIndexed = o.lastIndexedAt ? new Date(Number(o.lastIndexedAt)) : null;
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-8">
+      <header className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {lastIndexed
+              ? `Index refreshed ${formatDistanceToNow(lastIndexed, { addSuffix: true })}`
+              : "Index has not been built yet"}
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+      </header>
+
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          title="Sessions"
+          value={fmtNum(o.sessions.total)}
+          sub={
+            <span className="text-xs text-muted-foreground space-x-2">
+              <Badge variant="secondary" className="font-normal">{fmtNum(o.sessions.private)} private</Badge>
+              <Badge variant="secondary" className="font-normal">{fmtNum(o.sessions.group)} group</Badge>
+              <Badge variant="secondary" className="font-normal">{fmtNum(o.sessions.official)} official</Badge>
+            </span>
+          }
+        />
+        <StatCard
+          title="Indexed messages"
+          value={fmtNum(o.messages.total)}
+          sub={
+            <span className="text-xs text-muted-foreground">
+              {fmtNum(o.messages.last30d)} in last 30 days · {fmtNum(o.messages.last7d)} this week
+            </span>
+          }
+        />
+        <StatCard
+          title="Shared links"
+          value={fmtNum(o.urls.total)}
+          sub={<span className="text-xs text-muted-foreground">{fmtNum(o.urls.uniqueDomains)} unique domains</span>}
+        />
+        <StatCard
+          title="Contacts"
+          value={fmtNum(o.contacts)}
+          sub={<span className="text-xs text-muted-foreground">in your address book</span>}
+        />
+      </section>
+
+      <section className="grid gap-6 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>Activity (last 365 days)</CardTitle>
+            <CardDescription>Daily message count across all indexed chats</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ActivityChart data={o.activityByDay} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Message types</CardTitle>
+            <CardDescription>Top types in your index</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <MsgTypeList rows={o.msgTypes} />
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="grid gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Top link sources</CardTitle>
+            <CardDescription>Most shared domain groups across all chats</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <TopDomainsBar rows={o.topDomains} />
+          </CardContent>
+        </Card>
+      </section>
     </div>
+  );
+}
+
+function StatCard({ title, value, sub }: { title: string; value: string; sub?: React.ReactNode }) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardDescription>{title}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-1.5">
+        <div className="text-3xl font-semibold tracking-tight">{value}</div>
+        {sub}
+      </CardContent>
+    </Card>
   );
 }

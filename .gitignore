@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# autonomous-run working notes
+task_plan.md
+findings.md
+progress.md
