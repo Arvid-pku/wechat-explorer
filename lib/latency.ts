@@ -11,6 +11,11 @@
 export interface LatencyMessage {
   sender: string;
   timestamp: number;
+  // Callers commonly carry an extra `chat_username` for the partition path;
+  // an index signature keeps the type permissive without making sender / ts
+  // optional. (`unknown` over `string | number` since some callers may pull
+  // additional columns we don't model here.)
+  [extra: string]: unknown;
 }
 
 export interface LatencyResult {
@@ -20,17 +25,42 @@ export interface LatencyResult {
   youToThem: number[];
 }
 
+export interface LatencyOpts {
+  maxGapSec?: number;
+  /**
+   * Optional partition discriminator. When the stream contains messages from
+   * multiple chats (ordered `chat, ts ASC` for index-friendliness) and you
+   * don't want the cross-chat boundary to count as a "very late reply", set
+   * this to a per-row key (typically `chat_username`). The walk resets state
+   * whenever the key changes.
+   */
+  partition?: (m: LatencyMessage) => unknown;
+  /**
+   * Optional callback invoked for every accepted reply pair. Lets callers
+   * bucket latencies by month / per-chat without paying for a second walk.
+   * Signature: `(side, dt, earlierMessage, laterMessage) => void` where
+   * `side` is the side that *replied* ("me" replied → "me"; "them" replied →
+   * "them"). `earlierMessage` is the predecessor (the one being replied to).
+   */
+  onReply?: (
+    side: "me" | "them",
+    dt: number,
+    earlier: LatencyMessage,
+    later: LatencyMessage,
+  ) => void;
+}
+
 /**
- * Compute the latency arrays. `messages` should be ordered ascending by ts.
- * Pass `meHandles` (lowercased ideally; we match exact strings).
+ * Compute the latency arrays. `messages` should be ordered ascending by ts
+ * (or by `partition, ts ASC` when `opts.partition` is set).
  *
- * Default `maxGapSec` = 7 days (604_800). Anything longer than this is treated
- * as the start of a new conversation, not a "late reply."
+ * Default `maxGapSec` = 7 days (604_800). Anything longer is treated as the
+ * start of a new conversation, not a "late reply."
  */
 export function computeLatencies(
   messages: LatencyMessage[],
   meHandles: string[],
-  opts: { maxGapSec?: number } = {},
+  opts: LatencyOpts = {},
 ): LatencyResult {
   const maxGap = opts.maxGapSec ?? 7 * 24 * 3600;
   const meSet = new Set(meHandles);
@@ -39,27 +69,38 @@ export function computeLatencies(
 
   let lastSide: "me" | "them" | null = null;
   let lastTs = 0;
+  let lastMsg: LatencyMessage | null = null;
+  let lastPartition: unknown = undefined;
 
   for (const m of messages) {
-    const isMe = meSet.has(m.sender);
-    const side: "me" | "them" = isMe ? "me" : "them";
+    if (opts.partition) {
+      const p = opts.partition(m);
+      if (p !== lastPartition) {
+        lastPartition = p;
+        lastSide = null;
+        lastTs = 0;
+        lastMsg = null;
+      }
+    }
+    const side: "me" | "them" = meSet.has(m.sender) ? "me" : "them";
 
     if (lastSide !== null && side !== lastSide) {
       const dt = m.timestamp - lastTs;
       if (dt > 0 && dt <= maxGap) {
         if (side === "me") {
-          // they sent, then I replied → youToThem(?)
-          // Actually: them spoke at lastTs, me spoke now → I took dt to reply to them.
+          // them spoke at lastTs, me spoke now → I took dt to reply to them.
           youToThem.push(dt);
         } else {
           // me spoke at lastTs, them spoke now → they took dt to reply.
           themToYou.push(dt);
         }
+        if (opts.onReply && lastMsg) opts.onReply(side, dt, lastMsg, m);
       }
     }
 
     lastSide = side;
     lastTs = m.timestamp;
+    lastMsg = m;
   }
 
   return { themToYou, youToThem };

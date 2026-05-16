@@ -10,6 +10,7 @@ import { getDb } from "./db";
 import {
   EXCLUDED_SUBQUERY,
   ensureDailyCountsFresh,
+  excludedChatClause,
   excludedSubquery,
   getMeHandles,
 } from "./queries";
@@ -22,21 +23,15 @@ import {
 import {
   termFreq,
   tfidfAgainst,
-  topEmoji,
   type ScoredWord,
 } from "./text";
+import { computeStyle, type StyleFingerprint } from "./style";
 import { getCachedJSON } from "./cache";
 
-export interface MeStyle {
-  sampleSize: number;
-  avgChars: number;
-  emojiPerMsg: number;
-  linkPerMsg: number;
-  voiceShare: number;
-  imageShare: number;
-  stickerShare: number;
-  topEmoji: { emoji: string; n: number }[];
-}
+// MeStyle is a thin alias of the shared StyleFingerprint (no `side` field on
+// the /me dashboard since there's only one side). Kept as an export so older
+// page-level imports continue to work.
+export type MeStyle = StyleFingerprint;
 
 export interface MeTopChat {
   username: string;
@@ -62,6 +57,11 @@ export interface MeTimePoint {
   label: string;
   mine: number;
   theirs: number;
+  /** Their-message split by chat type. `theirsPrivate + theirsGroup + theirsOther === theirs`. */
+  theirsPrivate: number;
+  theirsGroup: number;
+  /** Catch-all for messages from non-private/non-group chats and NULL chat_username rows. */
+  theirsOther: number;
 }
 
 export interface MeHourly {
@@ -96,6 +96,20 @@ export interface MeTopSeries {
   points: MeTopSeriesPoint[];
 }
 
+export interface MeYoYStat {
+  myMessages: number;
+  myMessagesPrior: number;
+  totalMessages: number;
+  totalMessagesPrior: number;
+  mySharePct: number;
+  mySharePctPrior: number;
+  /** Active days in the period (mine > 0). */
+  activeDays: number;
+  activeDaysPrior: number;
+  /** True if the previous-period sample is at least 50% of the current one. */
+  reliable: boolean;
+}
+
 export interface MeStats {
   meHandles: string[];
   hasData: boolean; // false when no me-handles or zero mine messages
@@ -109,6 +123,8 @@ export interface MeStats {
     peakHourCount: number;
     msgsPerActiveDay: number;
   };
+  /** Rolling 365-day vs prior 365-day comparison, derived from daily_counts. */
+  yoy: MeYoYStat;
   monthly: MeMonth[];
   /** Aggregated activity time series — agg-controlled via `getMeStats({ agg })`. */
   series: MeTimePoint[];
@@ -178,10 +194,12 @@ function computeMeStats(agg: MeAggregation): MeStats {
 
   const meIn = `IN (${me.map(() => "?").join(",")})`;
   const meSet = new Set(me);
-  const excl = EXCLUDED_SUBQUERY;
-  const chatScope = `(chat_username IS NULL OR chat_username NOT IN ${excl})`;
-  const chatScopeAlias = (a: string) =>
-    `(${a}.chat_username IS NULL OR ${a}.chat_username NOT IN ${excl})`;
+  // Defer to the shared NULL-safe predicates from lib/queries (per AGENTS.md):
+  // local copies of these strings would silently drift on a future tweak to
+  // the exclusion semantics.
+  const excl = EXCLUDED_SUBQUERY; // still needed for raw IN-subquery interpolation
+  const chatScope = excludedChatClause();
+  const chatScopeAlias = (a: string) => excludedChatClause({ alias: a });
 
   // ── Totals ────────────────────────────────────────────────────────────
   const totalsRow = db
@@ -195,6 +213,56 @@ function computeMeStats(agg: MeAggregation): MeStats {
 
   if (totalsRow.mine === 0) return emptyStats(me, agg);
 
+  // Rolling 365-day YoY window. `daily_counts.day` is a 'YYYY-MM-DD' local-day
+  // string, so we just need string boundaries — no Unix-epoch math.
+  const localDay = (offsetDays: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() - offsetDays);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  const yoyRow = db
+    .prepare(
+      `SELECT
+         SUM(CASE WHEN day >= ?                   THEN n ELSE 0 END) AS total_cur,
+         SUM(CASE WHEN day >= ?                   THEN mine ELSE 0 END) AS mine_cur,
+         SUM(CASE WHEN day >= ?                   AND mine > 0 THEN 1 ELSE 0 END) AS active_cur,
+         SUM(CASE WHEN day >= ? AND day < ?       THEN n ELSE 0 END) AS total_prior,
+         SUM(CASE WHEN day >= ? AND day < ?       THEN mine ELSE 0 END) AS mine_prior,
+         SUM(CASE WHEN day >= ? AND day < ?       AND mine > 0 THEN 1 ELSE 0 END) AS active_prior
+       FROM daily_counts`,
+    )
+    .get(
+      localDay(365), localDay(365), localDay(365),
+      localDay(730), localDay(365),
+      localDay(730), localDay(365),
+      localDay(730), localDay(365),
+    ) as {
+    total_cur: number | null;
+    mine_cur: number | null;
+    active_cur: number | null;
+    total_prior: number | null;
+    mine_prior: number | null;
+    active_prior: number | null;
+  };
+  const yoyCurMine = yoyRow.mine_cur ?? 0;
+  const yoyPriorMine = yoyRow.mine_prior ?? 0;
+  const yoyCurTotal = yoyRow.total_cur ?? 0;
+  const yoyPriorTotal = yoyRow.total_prior ?? 0;
+  const yoy: MeYoYStat = {
+    myMessages: yoyCurMine,
+    myMessagesPrior: yoyPriorMine,
+    totalMessages: yoyCurTotal,
+    totalMessagesPrior: yoyPriorTotal,
+    mySharePct: yoyCurTotal > 0 ? (yoyCurMine / yoyCurTotal) * 100 : 0,
+    mySharePctPrior: yoyPriorTotal > 0 ? (yoyPriorMine / yoyPriorTotal) * 100 : 0,
+    activeDays: yoyRow.active_cur ?? 0,
+    activeDaysPrior: yoyRow.active_prior ?? 0,
+    // Treat the YoY as unreliable when the prior window had < 50% of the
+    // current window's activity — likely just an incomplete index, not a
+    // real "you talked a lot less last year" story.
+    reliable: yoyPriorMine > 0 && yoyPriorMine >= yoyCurMine * 0.5,
+  };
+
   // Active days + longest streak via daily_counts (cheap).
   const dailyRows = db
     .prepare(`SELECT day, mine FROM daily_counts WHERE mine > 0 ORDER BY day`)
@@ -203,62 +271,70 @@ function computeMeStats(agg: MeAggregation): MeStats {
   const longestStreak = computeLongestStreak(dailyRows.map((r) => r.day));
 
   // ── Monthly + Hourly + DoW ───────────────────────────────────────────
-  // Compute one CASE-aggregate query per dimension. Each scans messages but
-  // benefits from the timestamp index when no range filter applies.
-  const monthlyRaw = db
-    .prepare(
-      `SELECT
-         strftime('%Y-%m', timestamp, 'unixepoch', 'localtime') AS ym,
-         SUM(CASE WHEN sender ${meIn} THEN 1 ELSE 0 END) AS mine,
-         COUNT(*) AS total
-       FROM messages
-       WHERE ${chatScope}
-       GROUP BY ym
-       ORDER BY ym`,
-    )
-    .all(...me) as { ym: string; mine: number; total: number }[];
-  const monthly: MeMonth[] = monthlyRaw.map((r) => ({
-    ym: r.ym,
-    mine: r.mine,
-    theirs: r.total - r.mine,
-  }));
-
-  // Build the agg-bucketed series for the line chart. Month reuses the
-  // monthly aggregate above; week and year run a fresh GROUP BY with the
-  // matching strftime pattern. SQLite's `%W` is Sun-start week-of-year so
-  // labels look like `2025-W12`; if a finer ISO week is needed later we can
-  // swap to a CTE.
+  // Single aggregate per bucket that already breaks `theirs` down by chat
+  // type. The /me chart toggles between a two-line (you / them) view and a
+  // three-line (you / them-private / them-group) view; both modes read from
+  // the same `series` payload.
   const aggPattern: Record<MeAggregation, string> = {
     week: "%Y-W%W",
     month: "%Y-%m",
     year: "%Y",
   };
-  let series: MeTimePoint[];
-  if (agg === "month") {
-    series = monthlyRaw.map((r) => ({
-      label: r.ym,
-      mine: r.mine,
-      theirs: r.total - r.mine,
-    }));
-  } else {
-    const aggRaw = db
+
+  function pullSeries(strftimePattern: string): MeTimePoint[] {
+    const rows = db
       .prepare(
         `SELECT
-           strftime('${aggPattern[agg]}', timestamp, 'unixepoch', 'localtime') AS label,
-           SUM(CASE WHEN sender ${meIn} THEN 1 ELSE 0 END) AS mine,
+           strftime('${strftimePattern}', m.timestamp, 'unixepoch', 'localtime') AS label,
+           SUM(CASE WHEN m.sender ${meIn} THEN 1 ELSE 0 END) AS mine,
+           SUM(CASE
+                 WHEN m.sender NOT ${meIn} AND s.chat_type = 'private'
+                 THEN 1 ELSE 0
+               END) AS theirs_private,
+           SUM(CASE
+                 WHEN m.sender NOT ${meIn} AND s.chat_type = 'group'
+                 THEN 1 ELSE 0
+               END) AS theirs_group,
+           SUM(CASE
+                 WHEN m.sender NOT ${meIn}
+                      AND (s.chat_type IS NULL OR s.chat_type NOT IN ('private','group'))
+                 THEN 1 ELSE 0
+               END) AS theirs_other,
            COUNT(*) AS total
-         FROM messages
-         WHERE ${chatScope}
+         FROM messages m
+         LEFT JOIN sessions s ON s.username = m.chat_username
+         WHERE ${chatScopeAlias("m")}
          GROUP BY label
          ORDER BY label`,
       )
-      .all(...me) as { label: string; mine: number; total: number }[];
-    series = aggRaw.map((r) => ({
+      .all(...me, ...me, ...me, ...me) as {
+      label: string;
+      mine: number;
+      theirs_private: number;
+      theirs_group: number;
+      theirs_other: number;
+      total: number;
+    }[];
+    return rows.map((r) => ({
       label: r.label,
       mine: r.mine,
       theirs: r.total - r.mine,
+      theirsPrivate: r.theirs_private,
+      theirsGroup: r.theirs_group,
+      theirsOther: r.theirs_other,
     }));
   }
+
+  // `monthly` is what older callers expect (ym/mine/theirs shape); compute it
+  // from the same series so we never disagree across views.
+  const monthSeries = pullSeries(aggPattern.month);
+  const monthly: MeMonth[] = monthSeries.map((p) => ({
+    ym: p.label,
+    mine: p.mine,
+    theirs: p.theirs,
+  }));
+  const series: MeTimePoint[] =
+    agg === "month" ? monthSeries : pullSeries(aggPattern[agg]);
 
   const hourlyRaw = db
     .prepare(
@@ -483,36 +559,19 @@ function computeMeStats(agg: MeAggregation): MeStats {
     timestamp: number;
     chat_username: string | null;
   }[];
-  // Split into per-chat segments — required because the ORDER BY above
-  // groups by chat then time, so the boundary between two chats would be
-  // an artificial "reply" with massive latency. Walk and break on chat change.
-  const themLat: number[] = [];
-  const youLat: number[] = [];
-  {
-    let curChat: string | null | undefined = undefined;
-    let lastSide: "me" | "them" | null = null;
-    let lastTs = 0;
-    const maxGap = 7 * 86400;
-    for (const m of latencyMsgs) {
-      if (m.chat_username !== curChat) {
-        curChat = m.chat_username;
-        lastSide = null;
-        lastTs = 0;
-      }
-      const side: "me" | "them" = meSet.has(m.sender) ? "me" : "them";
-      if (lastSide !== null && side !== lastSide) {
-        const dt = m.timestamp - lastTs;
-        if (dt > 0 && dt <= maxGap) {
-          if (side === "me") youLat.push(dt);
-          else themLat.push(dt);
-        }
-      }
-      lastSide = side;
-      lastTs = m.timestamp;
-    }
-  }
+  // The SQL ORDER BY above groups by chat then time, so the cross-chat
+  // boundary needs a reset (otherwise it gets counted as a multi-month
+  // "reply"). Delegate to `computeLatencies` with a partition callback.
+  const { themToYou: themLat, youToThem: youLat } = computeLatencies(
+    latencyMsgs,
+    me,
+    { partition: (m) => m.chat_username },
+  );
   const meStats = latencyStats(youLat);
   const themStats = latencyStats(themLat);
+  // meSet is now only referenced earlier in the file (e.g. style emoji split);
+  // keep it bound for those call sites. The latency walk no longer needs it.
+  void meSet;
 
   // ── Records: longest messages I sent, busiest 1-minute burst ──────
   const longestMessages = db
@@ -562,6 +621,7 @@ function computeMeStats(agg: MeAggregation): MeStats {
       peakHourCount: peak.n,
       msgsPerActiveDay,
     },
+    yoy,
     monthly,
     series,
     agg,
@@ -602,6 +662,17 @@ function emptyStats(meHandles: string[], agg: MeAggregation): MeStats {
       peakHourCount: 0,
       msgsPerActiveDay: 0,
     },
+    yoy: {
+      myMessages: 0,
+      myMessagesPrior: 0,
+      totalMessages: 0,
+      totalMessagesPrior: 0,
+      mySharePct: 0,
+      mySharePctPrior: 0,
+      activeDays: 0,
+      activeDaysPrior: 0,
+      reliable: false,
+    },
     monthly: [],
     series: [],
     agg,
@@ -634,47 +705,6 @@ function emptyStats(meHandles: string[], agg: MeAggregation): MeStats {
     },
     longestMessages: [],
     burst: null,
-  };
-}
-
-const URL_RE = /https?:\/\/\S+/i;
-
-function computeStyle(rows: { content: string; msg_type: string }[]): MeStyle {
-  let chars = 0;
-  let emoji = 0;
-  let links = 0;
-  let voice = 0;
-  let image = 0;
-  let sticker = 0;
-  let textCount = 0;
-  const textForEmoji: string[] = [];
-  for (const r of rows) {
-    const c = r.content || "";
-    const t = r.msg_type;
-    if (t === "语音") voice++;
-    else if (t === "图片") image++;
-    else if (t === "表情") sticker++;
-    else if (t === "文本") {
-      textCount++;
-      chars += [...c].length;
-      for (const ch of c) if (/\p{Extended_Pictographic}/u.test(ch)) emoji++;
-      if (URL_RE.test(c)) links++;
-      textForEmoji.push(c);
-    } else if (t.includes("链接")) {
-      links++;
-    }
-  }
-  const n = rows.length || 1;
-  const textN = textCount || 1;
-  return {
-    sampleSize: rows.length,
-    avgChars: chars / textN,
-    emojiPerMsg: emoji / textN,
-    linkPerMsg: links / n,
-    voiceShare: voice / n,
-    imageShare: image / n,
-    stickerShare: sticker / n,
-    topEmoji: topEmoji(textForEmoji, 12),
   };
 }
 
