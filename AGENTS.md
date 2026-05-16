@@ -33,12 +33,12 @@ This is a local-only Next.js 16 app that turns the user's decrypted WeChat histo
   - `EXCLUDED_SUBQUERY` / `excludedSubquery({ includeArchived })` — raw `(SELECT username FROM sessions WHERE …)` subquery for `IN (…)` / `NOT IN (…)` / `EXISTS (…)` joins where the filtered column is known non-NULL.
   - `EXCLUDED_CHAT_CLAUSE` / `excludedChatClause({ alias, includeArchived })` — full predicate `(chat_username IS NULL OR chat_username NOT IN (…))`. **Prefer this when filtering `messages.chat_username` / `urls.chat_username`** — SQL `NULL NOT IN (…)` is `NULL` (i.e. row dropped), and ~18 messages have NULL `chat_username` that would otherwise vanish from every total.
 - **Links: read via the `urls_dedup` view.** Originally the view collapsed duplicates produced by two indexer paths. We've since added a real `urls.dedup_key` column with a `UNIQUE` index, so the view is now a trivial `SELECT * FROM urls` kept for call-site compatibility. The `dedup_key` is `url || \\x1f || timestamp || \\x1f || sender || \\x1f || COALESCE(chat_username, chat_display)` and is enforced at INSERT time — duplicate rows can no longer accumulate.
-- **`daily_counts` materialized table** (per-day `n`, `mine`, `n_with_archived`, `mine_with_archived`) powers Overview / Calendar heatmap / Surprises / `/me` totals without scanning the 614k-row `messages` table. Refreshed via `refreshDailyCounts()` at the end of every indexing run AND when me-handles change (because `mine` depends on them).
+- **`daily_counts` materialized table** (per-day `n`, `mine`, `n_with_archived`, `mine_with_archived`) powers Overview / Calendar heatmap / Surprises / `/me` totals / `/stats/messages` byMonth+byDow without scanning the 1M-row `messages` table. Refreshed via `refreshDailyCounts()` at the end of every indexing run AND when me-handles change (because `mine` depends on them). When in doubt, prefer this rollup over a re-scan; it's where every "spread across all messages" query should land.
 - **Parameterise SQL.** Use `?` placeholders, never string-interpolate user input. The only allowed inline interpolation is `${EXCLUDED_SUBQUERY}` / `${scope.excl}` / `${aggPattern[agg]}` and similar constant fragments built in code.
 - **Identify the user** with `getMeHandles()` (reads `meta.me_handles`, JSON array). Don't roll your own detection. See the wx CLI sender pitfall above re: `""`.
 - **FTS5 trigram min length is 3.** For shorter queries (very common for 2-char CJK like 庆祝 / 生日), `searchMessages` falls back to LIKE — don't break that path when refactoring. Multi-token queries with ANY short token use AND-LIKE; otherwise it wraps each token as a quoted FTS phrase (so operators like `:`, `-`, `*`, `NEAR` inside user input never trigger FTS syntax errors).
 - **Snippet HTML is built in JS, not via `snippet(messages_fts, …)`.** The FTS5 function emits raw column content between `<mark>` tags; forwarded WeChat messages can contain literal HTML / `<script>`. `buildSnippet()` in `lib/queries.ts` escapes everything except the `<mark>` it inserts itself.
-- **Don't repeatedly full-scan `messages`** (614k rows). Useful indexes: `idx_messages_chat (chat_username, timestamp DESC)`, `idx_messages_chat_display`, `idx_messages_ts`, `idx_messages_sender`, `idx_messages_type`. Include a `timestamp >= ? AND timestamp < ?` range whenever possible.
+- **Don't repeatedly full-scan `messages`** (~1M rows on a typical corpus — exact size varies; see `SELECT COUNT(*) FROM messages`). Useful indexes: `idx_messages_chat (chat_username, timestamp DESC)`, `idx_messages_chat_display`, `idx_messages_ts`, `idx_messages_sender`, `idx_messages_type`. Include a `timestamp >= ? AND timestamp < ?` range whenever possible. The redundant `idx_messages_chat_username` partial index was dropped in favor of the wider `idx_messages_chat` — same for `idx_urls_chat` (display) which lost to the partial `idx_urls_chat_username`.
 
 ## Persistent query cache (epoch-invalidated)
 
@@ -65,14 +65,17 @@ Heavy aggregates (recap / me-stats / year keywords / `/stats/*` / overview / sur
 ## Performance budget
 
 - Every page < 2s on warm load (mostly < 500ms thanks to `query_cache`).
-- Cold-load targets (post-cache-clear, on the current 614k-message corpus):
-  - `/` (Overview): ~2.5s — `getOverview` + `getSurprises` (Suspense-streamed) + `getRecapYears`
-  - `/me`: ~3.5s — `getMeStats({agg})` including top-5 multi-line series
-  - `/recap/<year>`: ~10s the very first time per year; second visit ~150ms via `query_cache`
-  - `/calendar`: ~1s
-  - `/stats/<topic>`: ~1–3s, all cached
-- Bulk operations chunk and stream — never block a render on the full 614k-row scan.
+- Cold-load targets (post-`DELETE /api/cache`, on a corpus of ~1M messages):
+  - `/` (Overview): ~1s — `getOverview` + `getSurprises` (Suspense-streamed) + `getRecapYears`
+  - `/me`: ~1–2s — `getMeStats({agg})` reads totals + YoY from `daily_counts`
+  - `/contacts/<username>`: ~3–5s first visit / ~150ms warm via `getCachedJSON`
+  - `/recap/<year>`: ~3–8s the very first time per year; second visit ~150ms via `query_cache`. The keyword-baseline TF map is independently cached under `recap-baseline-tf:y=…` so two chat-scoped recaps on the same year share it.
+  - `/calendar`: ~1s — every panel (heatmap, day detail, year keywords, on-this-day) is wrapped in `getCachedJSON`
+  - `/stats/<topic>`: ~1–3s, all cached. `/stats/messages` drives byMonth/byDow off `daily_counts`; only byHour still scans (covering index).
+  - `/settings`: hero card + index status stream first; the chat-hygiene panel is wrapped in `<Suspense>` and loads only the default preset server-side. Other presets fetch from `/api/archive-candidates` on demand.
+- Bulk operations chunk and stream — never block a render on a 1M-row scan.
 - Pre-aggregate into `sessions` columns where reasonable (`message_count`, `my_msg_count`, `distinct_senders`, `member_count`, `first_msg_timestamp`, `history_indexed_through`, `last_history_attempt_at`, `last_history_error`).
+- When you add a new heavy aggregate, wrap it in `getCachedJSON("…", () => compute())` so the second visit is free. Re-measure cold + warm via `curl -o /dev/null -w "%{time_starttransfer}\n"` after a `DELETE /api/cache`.
 
 ## Commit hygiene
 
@@ -92,7 +95,8 @@ Heavy aggregates (recap / me-stats / year keywords / `/stats/*` / overview / sur
 - `lib/stats.ts` — per-topic drilldown reads (all wrapped in cache).
 - `lib/me-stats.ts` — `getMeStats({ agg })` for `/me`. Multi-line top-5 series, voice fingerprint, latency, etc.
 - `lib/queries.calendar.ts` — day/year detail queries. All accept `chatUsername` for chat-scoped calendar.
-- `lib/queries.contact.ts` — contact analytics. `pickMeHandles` no longer treats `""` as me fallback (was incorrect — see pitfall).
+- `lib/queries.contact.ts` — contact analytics. `pickMeHandles` no longer treats `""` as me fallback (was incorrect — see pitfall). `getContactAnalytics` is wrapped in `getCachedJSON("contact-analytics:<username>")`.
+- `lib/style.ts` — shared `computeStyle` + `StyleFingerprint`. Both `/me` and the contact-detail page consume from here; the previous duplicated implementations are gone.
 - `lib/queries.graph.ts` — relationship graph assembly.
 - `lib/surprises.ts` — overview anomaly cards (cached per-day).
 - `lib/text.ts` / `lib/latency.ts` — TF-IDF + reply-latency math.
