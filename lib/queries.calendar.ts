@@ -9,6 +9,57 @@ import { getDb } from "./db";
 import { EXCLUDED_SUBQUERY, getMeHandles } from "./queries";
 import { tokenize, tfidfAgainst, type ScoredWord } from "./text";
 
+/**
+ * Words that survive the shared `tokenize` stopword list but are still
+ * conversational filler. Filtered locally in the calendar clouds so we don't
+ * mutate the shared STOPWORDS set (and break tests against it).
+ */
+const CALENDAR_STOPWORDS = new Set<string>([
+  // Chinese conversational filler / hedging
+  "感觉", "觉得", "现在", "确实", "好像", "嗯嗯", "就是", "还是", "不是",
+  "可能", "其实", "应该", "可以", "怎么", "什么", "为什么", "因为",
+  "比如", "比如说", "或者", "然后", "但是", "不过", "所以", "如果",
+  "之前", "之后", "之间", "今年", "明年", "去年",
+  "他们", "我们", "你们", "自己", "大家", "他", "她", "它",
+  "知道", "看到", "听到", "想到", "说到", "搞", "弄", "做",
+  "有点", "有些", "一点", "一些", "一下", "一直", "一样", "一起", "一个",
+  "差不多", "可能性", "情况下", "时候", "问题", "这样", "那样", "这种", "那种",
+  "这么", "那么", "怎样", "怎么样", "这里", "那里", "我的", "你的", "他的",
+  "不知道", "不太", "不会", "不能", "不要", "不想", "不用", "不行",
+  "已经", "正在", "刚刚", "刚才", "马上", "立刻",
+  "是不是", "是的", "对的", "对吧", "好吧", "好的", "好像", "可以的",
+  "的话", "之类", "等等", "啥", "诶", "嗯", "哦哦", "嗯嗯嗯", "哈哈哈",
+  "直接", "肯定", "当然", "估计", "据说", "听说",
+  "上面", "下面", "前面", "后面", "里面", "外面", "中间",
+  "想要", "要是", "要不", "要不要", "需要", "希望",
+  "看一下", "看看", "试试", "想想", "说一下",
+  // "我X / 你X / 都X / 也X" patterns that leaked through as bigrams
+  "我也", "我是", "我在", "我去", "我有", "我就", "我还", "我都", "我说", "我想",
+  "我不", "我看", "我觉", "我得", "我会", "我刚", "我已经",
+  "你也", "你是", "你在", "你有", "你说", "你想", "你不",
+  "都是", "都有", "都在", "都没", "也是", "也有", "也在", "也可以", "也不",
+  "还有", "还是", "很多", "很好", "很大", "很小", "很久",
+  "可以", "可以的",
+  // High-volume chat words that still leak through
+  "老师", "同学", "朋友", "时间", "事情", "东西", "地方", "今天", "昨天", "明天",
+  "周五", "周一", "周二", "周三", "周四", "周六", "周日", "星期",
+  "上午", "下午", "晚上", "中午", "早上",
+  "家伙",
+  // Western filler
+  "hh", "xs", "lol", "haha", "yeah", "yep", "nope", "kinda", "sorta",
+  "okay", "right", "really", "actually", "probably", "obviously", "definitely",
+  "basically", "literally", "totally",
+  "thing", "things", "stuff", "way", "ways", "kind", "sort", "bit",
+  "make", "made", "makes", "going", "got", "get", "gets", "getting",
+  "tho", "even", "still", "always", "never",
+  // Common standalone single-syllable Chinese
+  "嘛", "呀", "唉", "啧", "嘻", "嗷",
+]);
+
+function filterCalendarStopwords(words: ScoredWord[]): ScoredWord[] {
+  return words.filter((w) => !CALENDAR_STOPWORDS.has(w.word));
+}
+
 export interface ChatGroup {
   chat_username: string | null;
   chat_display: string;
@@ -215,7 +266,9 @@ export function getDayKeywords(day: string, _year: number): DayKeywordResult {
   }
   // Use end-of-day as the trailing-baseline anchor.
   const baseline = getSampledBaselineMap(endSec);
-  const words = tfidfAgainst(subset, baseline, { top: 30, min: 2 });
+  // Over-fetch then filter so we still end up with ~30 useful tokens.
+  const raw = tfidfAgainst(subset, baseline, { top: 60, min: 2 });
+  const words = filterCalendarStopwords(raw).slice(0, 30);
   return {
     words,
     subsetSize: docs.length,
@@ -233,10 +286,9 @@ export function getDayKeywords(day: string, _year: number): DayKeywordResult {
 export function getYearKeywords(year: number): DayKeywordResult {
   const db = getDb();
   const { startSec, endSec } = yearBounds(year);
-  // Sample roughly every 10th message inside the year. For a 400k-row year that
-  // yields ~40k content strings — still fast (~300ms tokenize) but plenty of
-  // signal.
-  const docs = db
+  // Sample roughly every 10th message by `timestamp % 10 = 0`. For a 400k-row
+  // year that yields ~40k content strings — fast tokenize, plenty of signal.
+  const yearDocs = db
     .prepare(
       `SELECT content FROM messages
        WHERE timestamp >= ? AND timestamp < ?
@@ -248,20 +300,38 @@ export function getYearKeywords(year: number): DayKeywordResult {
     .all(startSec, endSec) as { content: string }[];
 
   const subset = new Map<string, number>();
-  for (const d of docs) {
+  for (const d of yearDocs) {
     for (const t of tokenize(d.content)) subset.set(t, (subset.get(t) ?? 0) + 1);
   }
-  // All-time sampled baseline.
-  const baseline = getAllTimeBaselineMap();
-  const words = tfidfAgainst(subset, baseline, { top: 30, min: 5 });
+
+  // Baseline = all-time minus the year. We start from the cached all-time
+  // sampled map and subtract the year's tokens. Both maps use the same `% 10`
+  // sampling rate, so subtraction is meaningful.
+  const allTime = getAllTimeBaselineMap();
+  const baseline = new Map<string, number>();
+  for (const [k, v] of allTime) {
+    const sub = subset.get(k) ?? 0;
+    if (v > sub) baseline.set(k, v - sub);
+  }
+
+  const raw = tfidfAgainst(subset, baseline, { top: 80, min: 5 });
+  const words = filterCalendarStopwords(raw).slice(0, 30);
   return {
     words,
-    subsetSize: docs.length,
+    subsetSize: yearDocs.length,
     baselineSize: Array.from(baseline.values()).reduce((a, b) => a + b, 0),
   };
 }
 
 let _allTimeBaseline: Map<string, number> | null = null;
+/**
+ * All-time text baseline, sampled at every 10th row by `timestamp % 10 = 0`.
+ *
+ * The sampling rate matters: the year subset is also sampled at `% 10`, so a
+ * matching baseline-rate keeps subset:baseline counts on the same order of
+ * magnitude. A baseline that was too sparse made common filler words score
+ * high in the year cloud.
+ */
 function getAllTimeBaselineMap(): Map<string, number> {
   if (_allTimeBaseline) return _allTimeBaseline;
   const db = getDb();
@@ -270,7 +340,7 @@ function getAllTimeBaselineMap(): Map<string, number> {
       `SELECT content FROM messages
        WHERE msg_type = '文本'
          AND content != ''
-         AND (timestamp % 50) = 0
+         AND (timestamp % 10) = 0
          AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
     )
     .all() as { content: string }[];
@@ -295,7 +365,23 @@ export function getOnThisDay(monthDay: string, currentYear: number, limit = 6): 
   // We already know which years have data — iterate only those, build the
   // candidate day directly, and probe each via index-friendly range scans
   // rather than another `strftime` full-table aggregation.
+  const db = getDb();
   const candidates = getCoveredYears();
+  const countStmt = db.prepare(
+    `SELECT COUNT(*) AS n FROM messages
+     WHERE timestamp >= ? AND timestamp < ?
+       AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+  );
+  const sampleStmt = db.prepare(
+    `SELECT m.chat_display, m.chat_username, m.sender, m.content, m.timestamp
+     FROM messages m
+     WHERE m.timestamp >= ? AND m.timestamp < ?
+       AND m.msg_type IN ('文本')
+       AND m.content != ''
+       AND m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
+     ORDER BY m.timestamp DESC
+     LIMIT 4`,
+  );
 
   const out: OnThisDayYear[] = [];
   for (const year of candidates) {
@@ -303,28 +389,9 @@ export function getOnThisDay(monthDay: string, currentYear: number, limit = 6): 
     if (out.length >= limit) break;
     const day = `${year}-${monthDay}`;
     const { startSec, endSec } = dayBounds(day);
-    const total = (
-      db
-        .prepare(
-          `SELECT COUNT(*) AS n FROM messages
-           WHERE timestamp >= ? AND timestamp < ?
-             AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
-        )
-        .get(startSec, endSec) as { n: number }
-    ).n;
+    const total = (countStmt.get(startSec, endSec) as { n: number }).n;
     if (total === 0) continue;
-    const samples = db
-      .prepare(
-        `SELECT m.chat_display, m.chat_username, m.sender, m.content, m.timestamp
-         FROM messages m
-         WHERE m.timestamp >= ? AND m.timestamp < ?
-           AND m.msg_type IN ('文本')
-           AND m.content != ''
-           AND m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
-         ORDER BY m.timestamp DESC
-         LIMIT 4`,
-      )
-      .all(startSec, endSec) as OnThisDayYear["samples"];
+    const samples = sampleStmt.all(startSec, endSec) as OnThisDayYear["samples"];
     out.push({ year, day, total, samples });
   }
   return out;
@@ -382,38 +449,41 @@ export interface YearSummary {
  */
 export function getYearSummary(year: number): YearSummary {
   const db = getDb();
-  const yearStr = String(year);
+  const { startSec, endSec } = yearBounds(year);
 
   const total = (
     db
       .prepare(
         `SELECT COUNT(*) AS n FROM messages
-         WHERE strftime('%Y', timestamp, 'unixepoch', 'localtime') = ?
+         WHERE timestamp >= ? AND timestamp < ?
            AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
       )
-      .get(yearStr) as { n: number }
+      .get(startSec, endSec) as { n: number }
   ).n;
 
+  // strftime is unavoidable here for the per-day grouping, but it's bounded
+  // by the [startSec, endSec) range scan so it runs on a single year's slice
+  // rather than the whole 614k-row table.
   const busiestRow = db
     .prepare(
       `SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch', 'localtime') AS day, COUNT(*) AS n
        FROM messages
-       WHERE strftime('%Y', timestamp, 'unixepoch', 'localtime') = ?
+       WHERE timestamp >= ? AND timestamp < ?
          AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
        GROUP BY day
        ORDER BY n DESC
        LIMIT 1`,
     )
-    .get(yearStr) as { day: string; n: number } | undefined;
+    .get(startSec, endSec) as { day: string; n: number } | undefined;
 
   const uniqueChats = (
     db
       .prepare(
         `SELECT COUNT(DISTINCT chat_display) AS n FROM messages
-         WHERE strftime('%Y', timestamp, 'unixepoch', 'localtime') = ?
+         WHERE timestamp >= ? AND timestamp < ?
            AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
       )
-      .get(yearStr) as { n: number }
+      .get(startSec, endSec) as { n: number }
   ).n;
 
   const me = getMeHandles();
@@ -424,11 +494,11 @@ export function getYearSummary(year: number): YearSummary {
       db
         .prepare(
           `SELECT COUNT(*) AS n FROM messages
-           WHERE strftime('%Y', timestamp, 'unixepoch', 'localtime') = ?
+           WHERE timestamp >= ? AND timestamp < ?
              AND sender IN (${placeholders})
              AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
         )
-        .get(yearStr, ...me) as { n: number }
+        .get(startSec, endSec, ...me) as { n: number }
     ).n;
   }
 

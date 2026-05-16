@@ -182,13 +182,12 @@ export function getYearRecap(
     scopeDisplay = r.display_name;
   }
 
-  // Totals
+  // Totals — compute mine via a single sender IN clause, derive theirs as n - mine
   const totalsRow = db
     .prepare(
       `SELECT
          COUNT(*) AS n,
          SUM(CASE WHEN sender ${meIn} THEN 1 ELSE 0 END) AS mine,
-         SUM(CASE WHEN sender ${meIn} THEN 0 ELSE 1 END) AS theirs,
          COUNT(DISTINCT chat_username) AS chats,
          COUNT(DISTINCT strftime('%Y-%m-%d', timestamp, 'unixepoch', 'localtime')) AS days
        FROM messages
@@ -198,21 +197,20 @@ export function getYearRecap(
     .get(...meHandles, scope.yearStart, scope.yearEnd, ...scopedParams(scope)) as {
     n: number;
     mine: number;
-    theirs: number;
     chats: number;
     days: number;
   };
   if (totalsRow.n === 0) {
     return emptyRecap(year, chatUsername, scopeDisplay);
   }
+  const totalsTheirs = totalsRow.n - totalsRow.mine;
 
   // Monthly totals
-  const monthlyRows = db
+  const monthlyRaw = db
     .prepare(
       `SELECT
          strftime('%Y-%m', timestamp, 'unixepoch', 'localtime') AS ym,
          SUM(CASE WHEN sender ${meIn} THEN 1 ELSE 0 END) AS mine,
-         SUM(CASE WHEN sender ${meIn} THEN 0 ELSE 1 END) AS theirs,
          COUNT(*) AS total
        FROM messages
        WHERE timestamp >= ? AND timestamp < ?
@@ -220,22 +218,41 @@ export function getYearRecap(
        GROUP BY ym
        ORDER BY ym`,
     )
-    .all(...meHandles, scope.yearStart, scope.yearEnd, ...scopedParams(scope)) as RecapMonthly[];
+    .all(...meHandles, scope.yearStart, scope.yearEnd, ...scopedParams(scope)) as {
+    ym: string;
+    mine: number;
+    total: number;
+  }[];
+  const monthlyRows: RecapMonthly[] = monthlyRaw.map((r) => ({
+    ym: r.ym,
+    mine: r.mine,
+    theirs: r.total - r.mine,
+    total: r.total,
+  }));
 
   // Hourly aggregates
-  const hourlyRows = db
+  const hourlyRaw = db
     .prepare(
       `SELECT
          CAST(strftime('%H', timestamp, 'unixepoch', 'localtime') AS INTEGER) AS hour,
          SUM(CASE WHEN sender ${meIn} THEN 1 ELSE 0 END) AS mine,
-         SUM(CASE WHEN sender ${meIn} THEN 0 ELSE 1 END) AS theirs
+         COUNT(*) AS total
        FROM messages
        WHERE timestamp >= ? AND timestamp < ?
          AND ${scope.exclusionClause}
        GROUP BY hour
        ORDER BY hour`,
     )
-    .all(...meHandles, scope.yearStart, scope.yearEnd, ...scopedParams(scope)) as RecapHourly[];
+    .all(...meHandles, scope.yearStart, scope.yearEnd, ...scopedParams(scope)) as {
+    hour: number;
+    mine: number;
+    total: number;
+  }[];
+  const hourlyRows: RecapHourly[] = hourlyRaw.map((r) => ({
+    hour: r.hour,
+    mine: r.mine,
+    theirs: r.total - r.mine,
+  }));
 
   const hourly: RecapHourly[] = Array.from({ length: 24 }, (_, h) => {
     const r = hourlyRows.find((x) => x.hour === h);
@@ -265,9 +282,9 @@ export function getYearRecap(
            LIMIT 10`,
         )
         .all(
+          ...meHandles,
           scope.yearStart,
           scope.yearEnd,
-          ...meHandles,
           scope.yearStart,
           scope.yearEnd,
         ) as RecapContact[]);
@@ -294,9 +311,9 @@ export function getYearRecap(
            LIMIT 10`,
         )
         .all(
+          ...meHandles,
           scope.yearStart,
           scope.yearEnd,
-          ...meHandles,
           scope.yearStart,
           scope.yearEnd,
         ) as RecapContact[]);
@@ -468,7 +485,7 @@ export function getYearRecap(
   records.push({
     label: "Total messages",
     value: totalsRow.n.toLocaleString(),
-    detail: `${totalsRow.mine.toLocaleString()} yours · ${totalsRow.theirs.toLocaleString()} theirs`,
+    detail: `${totalsRow.mine.toLocaleString()} yours · ${totalsTheirs.toLocaleString()} theirs`,
   });
   records.push({
     label: "Unique chats",
@@ -646,7 +663,7 @@ export function getYearRecap(
     totals: {
       messages: totalsRow.n,
       mine: totalsRow.mine,
-      theirs: totalsRow.theirs,
+      theirs: totalsTheirs,
       links: topDomains.reduce((a, b) => a + b.n, 0),
       chats: totalsRow.chats,
       days: totalsRow.days,
