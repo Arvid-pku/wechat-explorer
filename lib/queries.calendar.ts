@@ -153,6 +153,14 @@ export function getDayMessagesGrouped(
   day: string,
   opts: { includeArchived?: boolean; chatUsername?: string | null } = {},
 ): ChatGroup[] {
+  const key = `day-grouped:d=${day}:c=${opts.chatUsername ?? ""}:a=${opts.includeArchived ? 1 : 0}`;
+  return getCachedJSON(key, () => computeDayMessagesGrouped(day, opts));
+}
+
+function computeDayMessagesGrouped(
+  day: string,
+  opts: { includeArchived?: boolean; chatUsername?: string | null } = {},
+): ChatGroup[] {
   const db = getDb();
   const { startSec, endSec } = dayBounds(day);
   const scope = scopeClause(opts.chatUsername, opts, "m.chat_username");
@@ -208,6 +216,14 @@ export function getDayMessagesGrouped(
  * 24-bucket hour histogram for a single day (post-exclusion).
  */
 export function getDayHourly(
+  day: string,
+  opts: { includeArchived?: boolean; chatUsername?: string | null } = {},
+): HourlyBucket[] {
+  const key = `day-hourly:d=${day}:c=${opts.chatUsername ?? ""}:a=${opts.includeArchived ? 1 : 0}`;
+  return getCachedJSON(key, () => computeDayHourly(day, opts));
+}
+
+function computeDayHourly(
   day: string,
   opts: { includeArchived?: boolean; chatUsername?: string | null } = {},
 ): HourlyBucket[] {
@@ -308,6 +324,15 @@ function getSampledBaselineMap(anchorSec: number): Map<string, number> {
  * Top-30 TF-IDF terms scoring `day`'s text against a sampled 365-day baseline.
  */
 export function getDayKeywords(
+  day: string,
+  year: number,
+  opts: { includeArchived?: boolean; chatUsername?: string | null } = {},
+): DayKeywordResult {
+  const key = `day-keywords:d=${day}:c=${opts.chatUsername ?? ""}:a=${opts.includeArchived ? 1 : 0}`;
+  return getCachedJSON(key, () => computeDayKeywords(day, year, opts));
+}
+
+function computeDayKeywords(
   day: string,
   _year: number,
   opts: { includeArchived?: boolean; chatUsername?: string | null } = {},
@@ -432,7 +457,22 @@ export function getOnThisDay(
   limit = 6,
   opts: { includeArchived?: boolean; chatUsername?: string | null } = {},
 ): OnThisDayYear[] {
-  // monthDay = "MM-DD" — sanity-validate so we never interpolate user input.
+  if (!/^\d{2}-\d{2}$/.test(monthDay)) return [];
+  // Cache key omits `currentYear` deliberately — the surfaced past-year samples
+  // are stable across reruns within the same calendar year. `limit` is part of
+  // the key so callers asking for more get a recompute, not a truncated cache.
+  const key = `on-this-day:md=${monthDay}:cy=${currentYear}:lim=${limit}:c=${opts.chatUsername ?? ""}:a=${opts.includeArchived ? 1 : 0}`;
+  return getCachedJSON(key, () =>
+    computeOnThisDay(monthDay, currentYear, limit, opts),
+  );
+}
+
+function computeOnThisDay(
+  monthDay: string,
+  currentYear: number,
+  limit: number,
+  opts: { includeArchived?: boolean; chatUsername?: string | null } = {},
+): OnThisDayYear[] {
   if (!/^\d{2}-\d{2}$/.test(monthDay)) return [];
   const db = getDb();
   const scope = scopeClause(opts.chatUsername, opts);

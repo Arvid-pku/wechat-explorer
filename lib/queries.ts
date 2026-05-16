@@ -239,7 +239,16 @@ export function upsertGroupMembers(groupUsername: string, members: RawMemberLike
 
 export interface Overview {
   sessions: { total: number; private: number; group: number; official: number; folded: number };
-  messages: { total: number; last7d: number; last30d: number; last365d: number };
+  messages: {
+    total: number;
+    last7d: number;
+    last30d: number;
+    last365d: number;
+    /** Same window length, immediately preceding the current one. */
+    prior7d: number;
+    prior30d: number;
+    prior365d: number;
+  };
   urls: { total: number; uniqueDomains: number };
   contacts: number;
   archived: number;
@@ -274,43 +283,66 @@ function computeOverview(): Overview {
   };
 
   // All msg / activity aggregates now read from the rollup → one O(days) scan
-  // instead of three full table scans + an aggregate over 614k rows.
+  // instead of three full table scans + an aggregate over 1M+ rows. We also
+  // compute the prior-period totals (`prior7d` = the 7 days before the last 7,
+  // etc.) so the Overview can render a period-over-period delta strip.
   const dailyAgg = db
     .prepare(
       `SELECT
          SUM(n) AS total,
-         SUM(CASE WHEN day >= ? THEN n ELSE 0 END) AS last7d,
-         SUM(CASE WHEN day >= ? THEN n ELSE 0 END) AS last30d,
-         SUM(CASE WHEN day >= ? THEN n ELSE 0 END) AS last365d
+         SUM(CASE WHEN day >= ?  THEN n ELSE 0 END) AS last7d,
+         SUM(CASE WHEN day >= ?  THEN n ELSE 0 END) AS last30d,
+         SUM(CASE WHEN day >= ?  THEN n ELSE 0 END) AS last365d,
+         SUM(CASE WHEN day >= ?  AND day < ? THEN n ELSE 0 END) AS prior7d,
+         SUM(CASE WHEN day >= ?  AND day < ? THEN n ELSE 0 END) AS prior30d,
+         SUM(CASE WHEN day >= ?  AND day < ? THEN n ELSE 0 END) AS prior365d
        FROM daily_counts`,
     )
-    .get(localDay(7), localDay(30), localDay(365)) as
-    | { total: number | null; last7d: number | null; last30d: number | null; last365d: number | null }
+    .get(
+      localDay(7),
+      localDay(30),
+      localDay(365),
+      localDay(14), localDay(7),
+      localDay(60), localDay(30),
+      localDay(730), localDay(365),
+    ) as
+    | {
+        total: number | null;
+        last7d: number | null;
+        last30d: number | null;
+        last365d: number | null;
+        prior7d: number | null;
+        prior30d: number | null;
+        prior365d: number | null;
+      }
     | undefined;
   const msgAgg = {
     total: dailyAgg?.total ?? 0,
     last7d: dailyAgg?.last7d ?? 0,
     last30d: dailyAgg?.last30d ?? 0,
     last365d: dailyAgg?.last365d ?? 0,
+    prior7d: dailyAgg?.prior7d ?? 0,
+    prior30d: dailyAgg?.prior30d ?? 0,
+    prior365d: dailyAgg?.prior365d ?? 0,
   };
 
   const urlAgg = db.prepare(`
     SELECT COUNT(*) AS total, COUNT(DISTINCT domain) AS uniqueDomains
     FROM urls_dedup
-    WHERE (chat_username IS NULL OR chat_username NOT IN ${EXCLUDED_SUBQUERY})
+    WHERE ${EXCLUDED_CHAT_CLAUSE}
   `).get() as { total: number; uniqueDomains: number };
 
   const contacts = (db.prepare(`SELECT COUNT(*) AS n FROM contacts`).get() as { n: number }).n;
 
   const topDomains = db.prepare(`
     SELECT domain_group, COUNT(*) AS n FROM urls_dedup
-    WHERE (chat_username IS NULL OR chat_username NOT IN ${EXCLUDED_SUBQUERY})
+    WHERE ${EXCLUDED_CHAT_CLAUSE}
     GROUP BY domain_group ORDER BY n DESC LIMIT 12
   `).all() as { domain_group: string; n: number }[];
 
   const msgTypes = db.prepare(`
     SELECT msg_type, COUNT(*) AS n FROM messages
-    WHERE (chat_username IS NULL OR chat_username NOT IN ${EXCLUDED_SUBQUERY})
+    WHERE ${EXCLUDED_CHAT_CLAUSE}
     GROUP BY msg_type ORDER BY n DESC LIMIT 10
   `).all() as { msg_type: string; n: number }[];
 
@@ -328,7 +360,15 @@ function computeOverview(): Overview {
       official: sessionsByType.official ?? 0,
       folded: sessionsByType.folded ?? 0,
     },
-    messages: { total: msgAgg.total, last7d: msgAgg.last7d, last30d: msgAgg.last30d, last365d: msgAgg.last365d },
+    messages: {
+      total: msgAgg.total,
+      last7d: msgAgg.last7d,
+      last30d: msgAgg.last30d,
+      last365d: msgAgg.last365d,
+      prior7d: msgAgg.prior7d,
+      prior30d: msgAgg.prior30d,
+      prior365d: msgAgg.prior365d,
+    },
     urls: { total: urlAgg.total, uniqueDomains: urlAgg.uniqueDomains },
     contacts,
     archived,
@@ -678,6 +718,16 @@ function escapeHtml(s: string): string {
 }
 
 export function getHeatmap(
+  year: number,
+  opts: { includeArchived?: boolean; chatUsername?: string | null } = {},
+): { day: string; n: number }[] {
+  // Past years are immutable; this year's heatmap drifts only on a new index
+  // (which bumps cache_epoch_index) so the cache invalidates naturally.
+  const key = `heatmap:y=${year}:c=${opts.chatUsername ?? ""}:a=${opts.includeArchived ? 1 : 0}`;
+  return getCachedJSON(key, () => computeHeatmap(year, opts));
+}
+
+function computeHeatmap(
   year: number,
   opts: { includeArchived?: boolean; chatUsername?: string | null } = {},
 ): { day: string; n: number }[] {

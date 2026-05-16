@@ -12,8 +12,10 @@
  */
 import { getDb } from "./db";
 import { getMeHandles } from "./queries";
-import { termFreq, tfidfAgainst, topEmoji, vocabDiff, type ScoredWord } from "./text";
+import { termFreq, tfidfAgainst, vocabDiff, type ScoredWord } from "./text";
 import { computeLatencies, type LatencyResult } from "./latency";
+import { computeStyle, type StyleFingerprint } from "./style";
+import { getCachedJSON } from "./cache";
 
 export const RECENT_TOKEN_LIMIT = 5000;
 export const BASELINE_SAMPLE = 20_000;
@@ -92,17 +94,9 @@ export interface SenderShare {
   knownUsername: string | null;
 }
 
-export interface StyleFingerprint {
-  side: "mine" | "theirs";
-  sampleSize: number;
-  avgChars: number;
-  emojiPerMsg: number;
-  linkPerMsg: number;
-  voiceShare: number;
-  imageShare: number;
-  stickerShare: number;
-  topEmoji: { emoji: string; n: number }[];
-}
+// StyleFingerprint moved to lib/style.ts and shared with me-stats.ts. Re-
+// exported here so the page-level type imports keep working.
+export type { StyleFingerprint } from "./style";
 
 export interface RecentMessage {
   id: number;
@@ -161,7 +155,6 @@ function pickMeHandles(handles: string[], _chatType: string, presentSenders: Set
 }
 
 const FILE_EXT_RE = /\.([a-z0-9]{1,6})(?:\b|[?#])/i;
-const URL_RE = /https?:\/\/\S+/i;
 
 function extFromContent(content: string, msgType: string): string | null {
   if (!content) return null;
@@ -191,56 +184,28 @@ function extFromContent(content: string, msgType: string): string | null {
   return null;
 }
 
-function computeStyle(
-  rows: { content: string; msg_type: string }[],
-  side: "mine" | "theirs",
-): StyleFingerprint {
-  let chars = 0;
-  let emoji = 0;
-  let links = 0;
-  let voice = 0;
-  let image = 0;
-  let sticker = 0;
-  const textForEmoji: string[] = [];
-  let textCount = 0;
-  for (const r of rows) {
-    const c = r.content || "";
-    const t = r.msg_type;
-    if (t === "语音") voice++;
-    else if (t === "图片") image++;
-    else if (t === "表情") sticker++;
-    else if (t === "文本") {
-      textCount++;
-      chars += [...c].length;
-      // emoji count
-      for (const ch of c) {
-        if (/\p{Extended_Pictographic}/u.test(ch)) emoji++;
-      }
-      if (URL_RE.test(c)) links++;
-      textForEmoji.push(c);
-    } else {
-      // 链接/文件 etc count as links for the "link rate" of a side
-      if (t.includes("链接")) links++;
-    }
-  }
-  const n = rows.length || 1;
-  const textN = textCount || 1;
-  return {
-    side,
-    sampleSize: rows.length,
-    avgChars: chars / textN,
-    emojiPerMsg: emoji / textN,
-    linkPerMsg: links / n,
-    voiceShare: voice / n,
-    imageShare: image / n,
-    stickerShare: sticker / n,
-    topEmoji: topEmoji(textForEmoji, 8),
-  };
-}
+// computeStyle moved to lib/style.ts; see that file for the implementation.
 
 /* ---------- the entrypoint ---------- */
 
+/**
+ * Cached wrapper. Each contact's analytics is a stable view that only changes
+ * when:
+ *   - the index epoch bumps (new messages or backfilled handles), or
+ *   - the archive epoch bumps (archive/restore, or me-handles change).
+ * Both are tracked by `getCachedJSON`, so we get correct invalidation for free.
+ * Cold path is ~3-5s on heavy chats; warm path is a single SQLite + JSON.parse.
+ *
+ * Returning `null` is also cached — looking up a non-existent username on a
+ * 1500-session corpus shouldn't repeat the SELECT.
+ */
 export function getContactAnalytics(username: string): ContactAnalytics | null {
+  return getCachedJSON(`contact-analytics:${username}`, () =>
+    computeContactAnalytics(username),
+  );
+}
+
+function computeContactAnalytics(username: string): ContactAnalytics | null {
   const db = getDb();
   const session = db
     .prepare(
