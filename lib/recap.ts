@@ -154,6 +154,12 @@ function scopedParams(scope: Scope, extra: (string | number)[] = []): (string | 
   return scope.username ? [scope.username, ...extra] : extra;
 }
 
+// In-process recap cache. Keyed by `${year}::${chatUsername ?? ''}`.
+// Invalidated after `RECAP_TTL_MS`; small enough to be safe (one entry per
+// open recap page during a browse session).
+const _recapCache = new Map<string, { recap: YearRecap; ts: number }>();
+const RECAP_TTL_MS = 5 * 60_000;
+
 /**
  * Fetch the entire recap for the year (and optional chat username). Heavy
  * single-call: ~500ms warm on 614k messages.
@@ -161,6 +167,21 @@ function scopedParams(scope: Scope, extra: (string | number)[] = []): (string | 
 export function getYearRecap(
   year: number,
   chatUsername: string | null = null,
+): YearRecap {
+  const cacheKey = `${year}::${chatUsername ?? ""}`;
+  const cached = _recapCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < RECAP_TTL_MS) {
+    return cached.recap;
+  }
+
+  const recap = computeRecap(year, chatUsername);
+  _recapCache.set(cacheKey, { recap, ts: Date.now() });
+  return recap;
+}
+
+function computeRecap(
+  year: number,
+  chatUsername: string | null,
 ): YearRecap {
   const db = getDb();
   const scope = buildScope(year, chatUsername);
@@ -565,61 +586,67 @@ export function getYearRecap(
     timestamp: number;
   }[];
 
-  let latencyData: { themToYou: number[]; youToThem: number[] };
+  // Compute full-year latencies once. Tag each latency with the YYYY-MM of the
+  // earlier message in the pair so we can bucket per-month without running 12
+  // additional queries.
+  const meSetLocal = new Set(meHandles);
+  const themLat: number[] = [];
+  const youLat: number[] = [];
+  const latencyTrendMap = new Map<string, { them: number[]; you: number[] }>();
+
+  function processSegment(seg: { sender: string; timestamp: number }[]) {
+    let lastSide: "me" | "them" | null = null;
+    let lastTs = 0;
+    const maxGap = 7 * 86400;
+    for (const m of seg) {
+      const side: "me" | "them" = meSetLocal.has(m.sender) ? "me" : "them";
+      if (lastSide !== null && side !== lastSide) {
+        const dt = m.timestamp - lastTs;
+        if (dt > 0 && dt <= maxGap) {
+          // bucket by the month of the *earlier* message
+          const monthKey = ymOf(lastTs);
+          let bucket = latencyTrendMap.get(monthKey);
+          if (!bucket) {
+            bucket = { them: [], you: [] };
+            latencyTrendMap.set(monthKey, bucket);
+          }
+          if (side === "me") {
+            youLat.push(dt);
+            bucket.you.push(dt);
+          } else {
+            themLat.push(dt);
+            bucket.them.push(dt);
+          }
+        }
+      }
+      lastSide = side;
+      lastTs = m.timestamp;
+    }
+  }
+
   if (chatUsername) {
-    latencyData = computeLatencies(latencyMsgs, meHandles);
+    processSegment(latencyMsgs);
   } else {
-    // For year-wide we need to segment per chat to avoid alternation across chats.
-    // Cheap: get per-chat ranges by sorting by chat_username then ts. But we don't
-    // have chat_username in the result above; do a simpler heuristic: split when
-    // ts decreases (chat boundary). Then run computeLatencies per segment.
-    const segments: { sender: string; timestamp: number }[][] = [];
     let cur: { sender: string; timestamp: number }[] = [];
     let prevTs = -1;
     for (const r of latencyMsgs) {
       if (r.timestamp < prevTs) {
-        if (cur.length) segments.push(cur);
+        if (cur.length) processSegment(cur);
         cur = [];
       }
       cur.push(r);
       prevTs = r.timestamp;
     }
-    if (cur.length) segments.push(cur);
-    const them: number[] = [];
-    const you: number[] = [];
-    for (const seg of segments) {
-      const { themToYou, youToThem } = computeLatencies(seg, meHandles);
-      them.push(...themToYou);
-      you.push(...youToThem);
-    }
-    latencyData = { themToYou: them, youToThem: you };
+    if (cur.length) processSegment(cur);
   }
+  const latencyData = { themToYou: themLat, youToThem: youLat };
 
-  // Latency trend by month (median)
-  const latencyTrendMap = new Map<string, { them: number[]; you: number[] }>();
-  // We can recompute by month using the same segmentation: simpler to bucket
-  // each latency by the timestamp of the *replied-to* message month.
-  // Since computeLatencies doesn't surface the ts, we'll do a per-month pass.
   const monthList = monthlyRows.map((m) => m.ym);
-  for (const ym of monthList) {
-    const start = Math.floor(new Date(`${ym}-01T00:00:00`).getTime() / 1000);
-    const [y, mo] = ym.split("-").map(Number);
-    const next = mo === 12 ? `${y + 1}-01-01` : `${y}-${String(mo + 1).padStart(2, "0")}-01`;
-    const end = Math.floor(new Date(`${next}T00:00:00`).getTime() / 1000);
-    const rows = db
-      .prepare(
-        `SELECT sender, timestamp
-         FROM messages
-         WHERE timestamp >= ? AND timestamp < ?
-           AND ${scope.exclusionClause}
-           AND sender != ''
-         ORDER BY ${chatUsername ? "timestamp ASC" : "chat_username, timestamp ASC"}
-         LIMIT 40000`,
-      )
-      .all(start, end, ...scopedParams(scope)) as {
-      sender: string;
-      timestamp: number;
-    }[];
+  // Trim unused (legacy) blocks below; the per-month loop is no longer needed.
+  for (const ym of [] as string[]) {
+    const start = 0;
+    const end = 0;
+    const rows: { sender: string; timestamp: number }[] = [];
     if (rows.length < 20) continue;
     const segments: typeof rows[] = [];
     let cur: typeof rows = [];
@@ -633,14 +660,7 @@ export function getYearRecap(
       prevTs = r.timestamp;
     }
     if (cur.length) segments.push(cur);
-    const them: number[] = [];
-    const you: number[] = [];
-    for (const seg of segments) {
-      const { themToYou, youToThem } = computeLatencies(seg, meHandles);
-      them.push(...themToYou);
-      you.push(...youToThem);
-    }
-    latencyTrendMap.set(ym, { them, you });
+    void segments;
   }
   const latencyTrend: RecapLatencyTrend[] = monthList.map((ym) => {
     const r = latencyTrendMap.get(ym) ?? { them: [], you: [] };
@@ -730,6 +750,11 @@ function emptyRecap(year: number, scopeUsername: string | null, scopeDisplay: st
     topEmojiTheirs: [],
     computedAt: new Date().toISOString(),
   };
+}
+
+function ymOf(unixSec: number): string {
+  const d = new Date(unixSec * 1000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function computeStreaks(
