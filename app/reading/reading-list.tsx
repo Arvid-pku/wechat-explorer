@@ -18,6 +18,8 @@ export interface ReadingItem {
   sender: string;
   timestamp: number;
   preview: string;
+  /** Number of times this URL was shared across all chats (>= 1). */
+  share_count?: number;
 }
 
 type FilterKey = "all" | "unread" | "read";
@@ -150,6 +152,14 @@ export function ReadingList({
                     {u.domain_group}
                   </Badge>
                 </Link>
+                {u.share_count && u.share_count > 1 ? (
+                  <span
+                    className="text-[10px] text-muted-foreground/80 tabular-nums"
+                    title={`This URL was shared ${u.share_count} times across the indexed corpus`}
+                  >
+                    shared {u.share_count}×
+                  </span>
+                ) : null}
                 {u.sender ? (
                   <Link
                     href={`/links/${encodeURIComponent(u.domain_group)}?sender=${encodeURIComponent(u.sender)}`}
