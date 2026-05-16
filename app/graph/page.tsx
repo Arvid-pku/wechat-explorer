@@ -21,6 +21,7 @@ export default async function GraphPage({
     minCoOccurrence?: string;
     maxGroups?: string;
     blur?: string;
+    archived?: string;
   }>;
 }) {
   const sp = await searchParams;
@@ -28,8 +29,14 @@ export default async function GraphPage({
   const minCoOccurrence = parseIntParam(sp.minCoOccurrence, 2, 2, 10);
   const maxGroups = parseIntParam(sp.maxGroups, 80, 20, 200);
   const blur = sp.blur === "1";
+  const includeArchived = sp.archived === "1";
 
-  const data = listGraphData({ minGroupSize, minCoOccurrence, maxGroups });
+  const data = listGraphData({ minGroupSize, minCoOccurrence, maxGroups, includeArchived });
+  const totalAvailableGroups =
+    data.stats.total_groups + (includeArchived ? data.stats.archived_groups : 0);
+  const totalIndexedGroups =
+    data.stats.indexed_groups +
+    (includeArchived ? data.stats.archived_indexed_groups : 0);
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-6">
@@ -40,8 +47,9 @@ export default async function GraphPage({
             Relationship graph
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {data.stats.indexed_groups} of {data.stats.total_groups} active groups have
-            membership data indexed
+            {totalIndexedGroups} of {totalAvailableGroups}
+            {includeArchived ? " active + archived" : " active"} groups have membership data
+            indexed
             {data.nodes.length > 0 && (
               <>
                 {" "}- showing{" "}
@@ -53,11 +61,19 @@ export default async function GraphPage({
                 co-occurrence edges
               </>
             )}
+            {data.stats.archived_groups > 0 && !includeArchived && (
+              <>
+                {" "}·{" "}
+                <span className="text-muted-foreground/80">
+                  {data.stats.archived_groups} archived hidden
+                </span>
+              </>
+            )}
           </p>
         </div>
       </header>
 
-      {data.stats.indexed_groups === 0 ? (
+      {totalIndexedGroups === 0 ? (
         <Card>
           <CardHeader>
             <CardTitle>No memberships yet</CardTitle>
@@ -75,8 +91,8 @@ export default async function GraphPage({
               populate. Each click does about 5 groups.
             </p>
             <p className="text-muted-foreground">
-              You have <span className="font-mono">{data.stats.total_groups}</span> active groups
-              awaiting backfill.
+              You have <span className="font-mono">{totalAvailableGroups}</span> groups awaiting
+              backfill.
             </p>
           </CardContent>
         </Card>
@@ -85,8 +101,8 @@ export default async function GraphPage({
           <CardHeader>
             <CardTitle>No nodes match current filters</CardTitle>
             <CardDescription>
-              {data.stats.indexed_groups} groups have memberships indexed, but none meet the
-              minimum group size of {minGroupSize}. Loosen the filter below.
+              {totalIndexedGroups} groups have memberships indexed, but none meet the minimum
+              group size of {minGroupSize}. Loosen the filter or toggle archived.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -97,6 +113,7 @@ export default async function GraphPage({
               minCoOccurrence={minCoOccurrence}
               maxGroups={maxGroups}
               blur={blur}
+              includeArchived={includeArchived}
             />
           </CardContent>
         </Card>
@@ -108,6 +125,7 @@ export default async function GraphPage({
           minCoOccurrence={minCoOccurrence}
           maxGroups={maxGroups}
           blur={blur}
+          includeArchived={includeArchived}
         />
       )}
     </div>

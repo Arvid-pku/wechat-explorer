@@ -36,6 +36,7 @@ interface Props {
   minCoOccurrence: number;
   maxGroups: number;
   blur: boolean;
+  includeArchived: boolean;
 }
 
 export function GraphClient({
@@ -45,6 +46,7 @@ export function GraphClient({
   minCoOccurrence,
   maxGroups,
   blur,
+  includeArchived,
 }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -55,6 +57,7 @@ export function GraphClient({
   const [localMinCo, setLocalMinCo] = useState(minCoOccurrence);
   const [localMax, setLocalMax] = useState(maxGroups);
   const [showNames, setShowNames] = useState(!blur);
+  const [withArchived, setWithArchived] = useState(includeArchived);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [, setTick] = useState(0);
 
@@ -70,6 +73,9 @@ export function GraphClient({
   useEffect(() => {
     setShowNames(!blur);
   }, [blur]);
+  useEffect(() => {
+    setWithArchived(includeArchived);
+  }, [includeArchived]);
 
   function pushParams(next: Partial<Record<string, string>>) {
     const params = new URLSearchParams(searchParams?.toString() ?? "");
@@ -295,6 +301,19 @@ export function GraphClient({
               <span className="w-9 text-right tabular-nums text-xs">{localMax}</span>
             </div>
             <div className="flex items-center gap-2 ml-auto">
+              <Switch
+                id="withArchived"
+                checked={withArchived}
+                onCheckedChange={(v) => {
+                  setWithArchived(v);
+                  pushParams({ archived: v ? "1" : "" });
+                }}
+              />
+              <Label htmlFor="withArchived" className="cursor-pointer">
+                Include archived
+              </Label>
+            </div>
+            <div className="flex items-center gap-2">
               <Switch
                 id="showNames"
                 checked={showNames}
