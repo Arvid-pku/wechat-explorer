@@ -60,6 +60,13 @@ export function GraphClient({
   const [withArchived, setWithArchived] = useState(includeArchived);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [, setTick] = useState(0);
+  // Gate the SVG until after client mount: d3-force seeds positions with
+  // Math.cos/Math.sin and the floating-point string serialisation can drift
+  // a digit between server and client, which trips React's hydration check.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     setLocalMinGroup(minGroupSize);
@@ -353,6 +360,8 @@ export function GraphClient({
           height={height}
           style={{ display: "block" }}
         >
+          {!mounted ? null : (
+          <>
           <g>
             {renderLinks.map((l, i) => {
               const a = endpoint(l.source);
@@ -427,6 +436,8 @@ export function GraphClient({
               );
             })}
           </g>
+          </>
+          )}
         </svg>
       </div>
     </div>
