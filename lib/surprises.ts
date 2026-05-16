@@ -113,14 +113,14 @@ export function getSurprises(): Surprise[] {
   // --- Domain shift: top domain in last 14 days that's >3× its share over the prior 90 days.
   const recentDomains = db
     .prepare(
-      `SELECT domain_group, COUNT(*) AS n FROM urls
+      `SELECT domain_group, COUNT(*) AS n FROM urls_dedup
        WHERE timestamp >= ? AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
        GROUP BY domain_group`,
     )
     .all(nowSec - 14 * day) as { domain_group: string; n: number }[];
   const baseDomains = db
     .prepare(
-      `SELECT domain_group, COUNT(*) AS n FROM urls
+      `SELECT domain_group, COUNT(*) AS n FROM urls_dedup
        WHERE timestamp < ? AND timestamp >= ? AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
        GROUP BY domain_group`,
     )

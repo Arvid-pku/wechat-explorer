@@ -161,6 +161,22 @@ function applyMigrations(db: DB) {
     CREATE INDEX IF NOT EXISTS idx_group_members_member ON group_members(member_username);
     CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_username);
   `);
+
+  // urls dedup view: same conceptual link can be inserted twice via different
+  // indexer paths (bulk \`wx search --type link\` vs per-chat \`wx history\`),
+  // each producing a different messages.content_hash and bypassing the URL
+  // unique index. This view picks one row per (url, ts, sender, chat).
+  db.exec(`DROP VIEW IF EXISTS urls_dedup`);
+  db.exec(`
+    CREATE VIEW urls_dedup AS
+    SELECT *
+    FROM urls
+    WHERE id IN (
+      SELECT MIN(id)
+      FROM urls
+      GROUP BY url, timestamp, sender, COALESCE(chat_username, chat_display)
+    )
+  `);
 }
 
 export function setMeta(key: string, value: string) {

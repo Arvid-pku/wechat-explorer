@@ -274,7 +274,7 @@ export function getContactAnalytics(username: string): ContactAnalytics | null {
     else theirs += s.n;
   }
   const linksCount = (db
-    .prepare(`SELECT COUNT(*) AS n FROM urls WHERE chat_username = ?`)
+    .prepare(`SELECT COUNT(*) AS n FROM urls_dedup WHERE chat_username = ?`)
     .get(username) as { n: number }).n;
 
   // 3) msg_type breakdown
@@ -384,7 +384,7 @@ export function getContactAnalytics(username: string): ContactAnalytics | null {
   // 9) top link domains (already filtered by chat)
   const topDomains = db
     .prepare(
-      `SELECT domain_group, COUNT(*) AS n FROM urls
+      `SELECT domain_group, COUNT(*) AS n FROM urls_dedup
        WHERE chat_username = ?
        GROUP BY domain_group ORDER BY n DESC LIMIT 8`,
     )

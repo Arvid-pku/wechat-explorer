@@ -25,7 +25,7 @@ export default async function ReadingPage() {
   const items = db
     .prepare(
       `SELECT id, url, domain_group, chat_display, sender, timestamp, preview
-       FROM urls
+       FROM urls_dedup
        WHERE domain_group IN (${placeholders})
        ORDER BY timestamp DESC
        LIMIT 80`,

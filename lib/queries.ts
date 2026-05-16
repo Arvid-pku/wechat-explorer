@@ -237,14 +237,14 @@ export function getOverview(): Overview {
 
   const urlAgg = db.prepare(`
     SELECT COUNT(*) AS total, COUNT(DISTINCT domain) AS uniqueDomains
-    FROM urls
+    FROM urls_dedup
     WHERE chat_username NOT IN ${EXCLUDED_SUBQUERY}
   `).get() as { total: number; uniqueDomains: number };
 
   const contacts = (db.prepare(`SELECT COUNT(*) AS n FROM contacts`).get() as { n: number }).n;
 
   const topDomains = db.prepare(`
-    SELECT domain_group, COUNT(*) AS n FROM urls
+    SELECT domain_group, COUNT(*) AS n FROM urls_dedup
     WHERE chat_username NOT IN ${EXCLUDED_SUBQUERY}
     GROUP BY domain_group ORDER BY n DESC LIMIT 12
   `).all() as { domain_group: string; n: number }[];
@@ -330,7 +330,7 @@ export function listSessions(opts: { type?: string; sort?: string; limit?: numbe
 
   return db.prepare(`
     WITH url_counts AS (
-      SELECT chat_username, COUNT(*) AS n FROM urls WHERE chat_username IS NOT NULL GROUP BY chat_username
+      SELECT chat_username, COUNT(*) AS n FROM urls_dedup WHERE chat_username IS NOT NULL GROUP BY chat_username
     )
     SELECT
       s.username, s.display_name, s.chat_type, s.is_group, s.last_timestamp, s.unread, s.archived,
@@ -348,11 +348,19 @@ export function getSessionByUsername(username: string) {
   return db.prepare(`SELECT * FROM sessions WHERE username = ?`).get(username);
 }
 
+/**
+ * Read-side URL queries use the `urls_dedup` view (defined in `lib/db.ts`)
+ * because the same conceptual shared link can be ingested twice via two
+ * indexer paths (`wx search --type link` for bulk + per-chat `wx history`).
+ * The two passes can produce different `messages.content_hash` values, so
+ * the URL row's unique index on (content_hash, url) doesn't dedupe. The
+ * view collapses (url, ts, sender, chat) → one row.
+ */
 export function getLinkGroups(): { domain_group: string; n: number; latest_ts: number }[] {
   const db = getDb();
   return db.prepare(`
     SELECT domain_group, COUNT(*) AS n, MAX(timestamp) AS latest_ts
-    FROM urls
+    FROM urls_dedup
     WHERE chat_username NOT IN ${EXCLUDED_SUBQUERY}
     GROUP BY domain_group
     ORDER BY n DESC
@@ -379,7 +387,7 @@ export function getLinksInGroup(group: string, opts: { limit?: number; offset?: 
   params.push(opts.offset ?? 0);
   return db.prepare(`
     SELECT id, url, domain, domain_group, chat_display, sender, timestamp, preview
-    FROM urls
+    FROM urls_dedup
     WHERE ${conditions.join(" AND ")}
     ORDER BY timestamp DESC
     LIMIT ? OFFSET ?
@@ -397,8 +405,16 @@ export function getLinksInGroup(group: string, opts: { limit?: number; offset?: 
 
 export function getLinkGroupFacets(group: string): { senders: { sender: string; n: number }[]; chats: { chat_display: string; n: number }[] } {
   const db = getDb();
-  const senders = db.prepare(`SELECT sender, COUNT(*) AS n FROM urls WHERE domain_group = ? AND sender != '' AND chat_username NOT IN ${EXCLUDED_SUBQUERY} GROUP BY sender ORDER BY n DESC LIMIT 30`).all(group) as { sender: string; n: number }[];
-  const chats = db.prepare(`SELECT chat_display, COUNT(*) AS n FROM urls WHERE domain_group = ? AND chat_username NOT IN ${EXCLUDED_SUBQUERY} GROUP BY chat_display ORDER BY n DESC LIMIT 30`).all(group) as { chat_display: string; n: number }[];
+  const senders = db.prepare(
+    `SELECT sender, COUNT(*) AS n FROM urls_dedup
+     WHERE domain_group = ? AND sender != '' AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
+     GROUP BY sender ORDER BY n DESC LIMIT 30`,
+  ).all(group) as { sender: string; n: number }[];
+  const chats = db.prepare(
+    `SELECT chat_display, COUNT(*) AS n FROM urls_dedup
+     WHERE domain_group = ? AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
+     GROUP BY chat_display ORDER BY n DESC LIMIT 30`,
+  ).all(group) as { chat_display: string; n: number }[];
   return { senders, chats };
 }
 
@@ -457,10 +473,10 @@ export function getSessionDetail(username: string) {
   const session = db.prepare(`SELECT * FROM sessions WHERE username = ?`).get(username);
   if (!session) return null;
   const recent = db.prepare(`SELECT id, sender, msg_type, content, timestamp FROM messages WHERE chat_username = ? ORDER BY timestamp DESC LIMIT 100`).all(username);
-  const links = db.prepare(`SELECT id, url, domain, domain_group, sender, timestamp, preview FROM urls WHERE chat_username = ? ORDER BY timestamp DESC LIMIT 100`).all(username);
+  const links = db.prepare(`SELECT id, url, domain, domain_group, sender, timestamp, preview FROM urls_dedup WHERE chat_username = ? ORDER BY timestamp DESC LIMIT 100`).all(username);
   const senderBreakdown = db.prepare(`SELECT sender, COUNT(*) AS n FROM messages WHERE chat_username = ? GROUP BY sender ORDER BY n DESC LIMIT 20`).all(username);
   const stats = db.prepare(`SELECT COUNT(*) AS messages, MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts FROM messages WHERE chat_username = ?`).get(username);
-  const linkGroups = db.prepare(`SELECT domain_group, COUNT(*) AS n FROM urls WHERE chat_username = ? GROUP BY domain_group ORDER BY n DESC LIMIT 10`).all(username);
+  const linkGroups = db.prepare(`SELECT domain_group, COUNT(*) AS n FROM urls_dedup WHERE chat_username = ? GROUP BY domain_group ORDER BY n DESC LIMIT 10`).all(username);
   return { session, recent, links, senderBreakdown, stats, linkGroups };
 }
 
@@ -502,7 +518,7 @@ export function listArchiveCandidates(opts: { staleDays?: number; types?: string
 
   return db.prepare(`
     WITH url_counts AS (
-      SELECT chat_username, COUNT(*) AS n FROM urls WHERE chat_username IS NOT NULL GROUP BY chat_username
+      SELECT chat_username, COUNT(*) AS n FROM urls_dedup WHERE chat_username IS NOT NULL GROUP BY chat_username
     )
     SELECT
       s.username, s.display_name, s.chat_type, s.last_timestamp, s.unread, s.archived,
@@ -521,7 +537,7 @@ export function listArchived(): ArchiveCandidate[] {
   const db = getDb();
   return db.prepare(`
     WITH url_counts AS (
-      SELECT chat_username, COUNT(*) AS n FROM urls WHERE chat_username IS NOT NULL GROUP BY chat_username
+      SELECT chat_username, COUNT(*) AS n FROM urls_dedup WHERE chat_username IS NOT NULL GROUP BY chat_username
     )
     SELECT
       s.username, s.display_name, s.chat_type, s.last_timestamp, s.unread, s.archived,

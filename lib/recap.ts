@@ -289,7 +289,7 @@ function computeRecap(
              COUNT(m.id) AS n,
              SUM(CASE WHEN m.sender ${meIn} THEN 1 ELSE 0 END) AS my_msgs,
              COALESCE((
-               SELECT COUNT(*) FROM urls u
+               SELECT COUNT(*) FROM urls_dedup u
                WHERE u.chat_username = s.username
                  AND u.timestamp >= ? AND u.timestamp < ?
              ), 0) AS links
@@ -318,7 +318,7 @@ function computeRecap(
              COUNT(m.id) AS n,
              SUM(CASE WHEN m.sender ${meIn} THEN 1 ELSE 0 END) AS my_msgs,
              COALESCE((
-               SELECT COUNT(*) FROM urls u
+               SELECT COUNT(*) FROM urls_dedup u
                WHERE u.chat_username = s.username
                  AND u.timestamp >= ? AND u.timestamp < ?
              ), 0) AS links
@@ -343,7 +343,7 @@ function computeRecap(
   const topDomains = db
     .prepare(
       `SELECT domain_group, COUNT(*) AS n
-       FROM urls
+       FROM urls_dedup
        WHERE timestamp >= ? AND timestamp < ?
          AND ${chatUsername ? "chat_username = ?" : `chat_username NOT IN ${EXCLUDED_SUBQUERY}`}
        GROUP BY domain_group
@@ -825,7 +825,7 @@ export function getYearBaseline(
   };
   const links = db
     .prepare(
-      `SELECT COUNT(*) AS n FROM urls
+      `SELECT COUNT(*) AS n FROM urls_dedup
        WHERE timestamp >= ? AND timestamp < ?
          AND ${chatUsername ? "chat_username = ?" : `chat_username NOT IN ${EXCLUDED_SUBQUERY}`}`,
     )

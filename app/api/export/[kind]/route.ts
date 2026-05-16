@@ -71,7 +71,7 @@ export async function GET(
       rows = db
         .prepare(
           `SELECT id, url, domain, domain_group, chat_display, sender, timestamp, preview
-           FROM urls
+           FROM urls_dedup
            WHERE ${filters.join(" AND ")}
            ORDER BY timestamp DESC
            LIMIT ?`,
@@ -108,7 +108,7 @@ export async function GET(
       rows = db
         .prepare(
           `SELECT domain_group, domain, COUNT(*) AS n, MAX(timestamp) AS latest_ts
-           FROM urls
+           FROM urls_dedup
            WHERE chat_username NOT IN ${EXCLUDED_SUBQUERY}
            GROUP BY domain_group, domain
            ORDER BY n DESC`,
