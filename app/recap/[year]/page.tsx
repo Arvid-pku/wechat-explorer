@@ -11,6 +11,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Download, Sparkles, Calendar, ExternalLink } from "lucide-react";
 import { getYearRecap, getRecapYears, getYearBaseline } from "@/lib/recap";
+import { ArchivedToggle, buildArchivedToggleHref } from "@/components/archived-toggle";
 import { formatLatency } from "@/lib/latency";
 import { MonthlyBars } from "@/components/charts/recap/monthly-bars";
 import { HourlyGrid } from "@/components/charts/recap/hourly-grid";
@@ -48,16 +49,20 @@ function fmtNum(n: number) {
 
 export default async function RecapPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ year: string }>;
+  searchParams: Promise<{ archived?: string }>;
 }) {
   const { year: yStr } = await params;
+  const sp = await searchParams;
   const year = parseInt(yStr, 10);
   if (!Number.isFinite(year) || year < 2000 || year > 2100) return notFound();
-  const recap = getYearRecap(year, null);
+  const includeArchived = sp.archived === "1";
+  const recap = getYearRecap(year, null, { includeArchived });
   const knownYears = getRecapYears();
   const prevYear = knownYears.find((y) => y < year) ?? null;
-  const prevBaseline = prevYear ? getYearBaseline(prevYear, null) : null;
+  const prevBaseline = prevYear ? getYearBaseline(prevYear, null, { includeArchived }) : null;
 
   return (
     <div className="mx-auto w-full max-w-6xl px-6 py-8 space-y-10">
@@ -82,7 +87,7 @@ export default async function RecapPage({
             {knownYears.slice(0, 6).map((y) => (
               <Link
                 key={y}
-                href={`/recap/${y}`}
+                href={`/recap/${y}${includeArchived ? "?archived=1" : ""}`}
                 className={`rounded-md border border-border/60 px-3 py-1 text-sm hover:bg-accent ${
                   y === year ? "bg-accent" : "text-muted-foreground"
                 }`}
@@ -90,8 +95,13 @@ export default async function RecapPage({
                 {y}
               </Link>
             ))}
+            <ArchivedToggle
+              on={includeArchived}
+              href={buildArchivedToggleHref(`/recap/${year}`, sp, includeArchived)}
+            />
+
             <a
-              href={`/api/recap/${year}/export`}
+              href={`/api/recap/${year}/export${includeArchived ? "?archived=1" : ""}`}
               className="inline-flex items-center gap-1 rounded-md border border-border/60 px-3 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent"
             >
               <Download className="size-3.5" />

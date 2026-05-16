@@ -6,7 +6,7 @@
  * folded sessions don't bleed into "personal" analytics.
  */
 import { getDb } from "./db";
-import { EXCLUDED_SUBQUERY, getMeHandles } from "./queries";
+import { EXCLUDED_SUBQUERY, excludedSubquery, getMeHandles } from "./queries";
 import { tokenize, tfidfAgainst, type ScoredWord } from "./text";
 
 /**
@@ -123,9 +123,10 @@ function yearBounds(year: number): { startSec: number; endSec: number } {
  * One row per chat that had messages on `day`, sorted by message count desc,
  * plus up to 8 latest sample messages per chat.
  */
-export function getDayMessagesGrouped(day: string): ChatGroup[] {
+export function getDayMessagesGrouped(day: string, opts: { includeArchived?: boolean } = {}): ChatGroup[] {
   const db = getDb();
   const { startSec, endSec } = dayBounds(day);
+  const excl = excludedSubquery(opts);
 
   // First: aggregate per-chat counts.
   const groups = db
@@ -138,7 +139,7 @@ export function getDayMessagesGrouped(day: string): ChatGroup[] {
          MAX(m.timestamp) AS last_ts
        FROM messages m
        WHERE m.timestamp >= ? AND m.timestamp < ?
-         AND (m.chat_username IS NULL OR m.chat_username NOT IN ${EXCLUDED_SUBQUERY})
+         AND (m.chat_username IS NULL OR m.chat_username NOT IN ${excl})
        GROUP BY m.chat_username, m.chat_display
        ORDER BY n DESC, last_ts DESC
        LIMIT 200`,
@@ -177,16 +178,17 @@ export function getDayMessagesGrouped(day: string): ChatGroup[] {
 /**
  * 24-bucket hour histogram for a single day (post-exclusion).
  */
-export function getDayHourly(day: string): HourlyBucket[] {
+export function getDayHourly(day: string, opts: { includeArchived?: boolean } = {}): HourlyBucket[] {
   const db = getDb();
   const { startSec, endSec } = dayBounds(day);
+  const excl = excludedSubquery(opts);
   const rows = db
     .prepare(
       `SELECT CAST(strftime('%H', timestamp, 'unixepoch', 'localtime') AS INTEGER) AS hour,
               COUNT(*) AS n
        FROM messages
        WHERE timestamp >= ? AND timestamp < ?
-         AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
+         AND chat_username NOT IN ${excl}
        GROUP BY hour
        ORDER BY hour`,
     )
@@ -200,15 +202,16 @@ export function getDayHourly(day: string): HourlyBucket[] {
 /**
  * Pull every text-message content string in the [startSec, endSec) window.
  */
-function pullTextContent(startSec: number, endSec: number): string[] {
+function pullTextContent(startSec: number, endSec: number, opts: { includeArchived?: boolean } = {}): string[] {
   const db = getDb();
+  const excl = excludedSubquery(opts);
   const rows = db
     .prepare(
       `SELECT content FROM messages
        WHERE timestamp >= ? AND timestamp < ?
          AND msg_type = '文本'
          AND content != ''
-         AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+         AND chat_username NOT IN ${excl}`,
     )
     .all(startSec, endSec) as { content: string }[];
   return rows.map((r) => r.content);
@@ -257,9 +260,9 @@ function getSampledBaselineMap(anchorSec: number): Map<string, number> {
 /**
  * Top-30 TF-IDF terms scoring `day`'s text against a sampled 365-day baseline.
  */
-export function getDayKeywords(day: string, _year: number): DayKeywordResult {
+export function getDayKeywords(day: string, _year: number, opts: { includeArchived?: boolean } = {}): DayKeywordResult {
   const { startSec, endSec } = dayBounds(day);
-  const docs = pullTextContent(startSec, endSec);
+  const docs = pullTextContent(startSec, endSec, opts);
   const subset = new Map<string, number>();
   for (const d of docs) {
     for (const t of tokenize(d)) subset.set(t, (subset.get(t) ?? 0) + 1);
@@ -283,9 +286,10 @@ export function getDayKeywords(day: string, _year: number): DayKeywordResult {
  * subset at a few thousand messages by hashing on timestamp parity so we stay
  * fast on ~400k-row years).
  */
-export function getYearKeywords(year: number): DayKeywordResult {
+export function getYearKeywords(year: number, opts: { includeArchived?: boolean } = {}): DayKeywordResult {
   const db = getDb();
   const { startSec, endSec } = yearBounds(year);
+  const excl = excludedSubquery(opts);
   // Sample roughly every 10th message by `timestamp % 10 = 0`. For a 400k-row
   // year that yields ~40k content strings — fast tokenize, plenty of signal.
   const yearDocs = db
@@ -295,7 +299,7 @@ export function getYearKeywords(year: number): DayKeywordResult {
          AND msg_type = '文本'
          AND content != ''
          AND (timestamp % 10) = 0
-         AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+         AND chat_username NOT IN ${excl}`,
     )
     .all(startSec, endSec) as { content: string }[];
 
@@ -359,18 +363,19 @@ function getAllTimeBaselineMap(): Map<string, number> {
  * up to 4 sample messages. Only years that actually have data on that MM-DD
  * are returned.
  */
-export function getOnThisDay(monthDay: string, currentYear: number, limit = 6): OnThisDayYear[] {
+export function getOnThisDay(monthDay: string, currentYear: number, limit = 6, opts: { includeArchived?: boolean } = {}): OnThisDayYear[] {
   // monthDay = "MM-DD" — sanity-validate so we never interpolate user input.
   if (!/^\d{2}-\d{2}$/.test(monthDay)) return [];
   // We already know which years have data — iterate only those, build the
   // candidate day directly, and probe each via index-friendly range scans
   // rather than another `strftime` full-table aggregation.
   const db = getDb();
+  const excl = excludedSubquery(opts);
   const candidates = getCoveredYears();
   const countStmt = db.prepare(
     `SELECT COUNT(*) AS n FROM messages
      WHERE timestamp >= ? AND timestamp < ?
-       AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+       AND chat_username NOT IN ${excl}`,
   );
   const sampleStmt = db.prepare(
     `SELECT m.chat_display, m.chat_username, m.sender, m.content, m.timestamp
@@ -378,7 +383,7 @@ export function getOnThisDay(monthDay: string, currentYear: number, limit = 6): 
      WHERE m.timestamp >= ? AND m.timestamp < ?
        AND m.msg_type IN ('文本')
        AND m.content != ''
-       AND m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
+       AND m.chat_username NOT IN ${excl}
      ORDER BY m.timestamp DESC
      LIMIT 4`,
   );
@@ -447,16 +452,17 @@ export interface YearSummary {
 /**
  * Cheap summary statistics for the year switcher header.
  */
-export function getYearSummary(year: number): YearSummary {
+export function getYearSummary(year: number, opts: { includeArchived?: boolean } = {}): YearSummary {
   const db = getDb();
   const { startSec, endSec } = yearBounds(year);
+  const excl = excludedSubquery(opts);
 
   const total = (
     db
       .prepare(
         `SELECT COUNT(*) AS n FROM messages
          WHERE timestamp >= ? AND timestamp < ?
-           AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+           AND chat_username NOT IN ${excl}`,
       )
       .get(startSec, endSec) as { n: number }
   ).n;
@@ -469,7 +475,7 @@ export function getYearSummary(year: number): YearSummary {
       `SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch', 'localtime') AS day, COUNT(*) AS n
        FROM messages
        WHERE timestamp >= ? AND timestamp < ?
-         AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
+         AND chat_username NOT IN ${excl}
        GROUP BY day
        ORDER BY n DESC
        LIMIT 1`,
@@ -481,7 +487,7 @@ export function getYearSummary(year: number): YearSummary {
       .prepare(
         `SELECT COUNT(DISTINCT chat_display) AS n FROM messages
          WHERE timestamp >= ? AND timestamp < ?
-           AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+           AND chat_username NOT IN ${excl}`,
       )
       .get(startSec, endSec) as { n: number }
   ).n;
@@ -496,7 +502,7 @@ export function getYearSummary(year: number): YearSummary {
           `SELECT COUNT(*) AS n FROM messages
            WHERE timestamp >= ? AND timestamp < ?
              AND sender IN (${placeholders})
-             AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+             AND chat_username NOT IN ${excl}`,
         )
         .get(startSec, endSec, ...me) as { n: number }
     ).n;

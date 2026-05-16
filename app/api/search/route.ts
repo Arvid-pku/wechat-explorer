@@ -8,6 +8,7 @@ export async function GET(request: Request) {
   const q = (searchParams.get("q") ?? "").trim();
   const type = searchParams.get("type") ?? undefined;
   const chat = searchParams.get("chat") ?? undefined;
+  const includeArchived = searchParams.get("archived") === "1";
   const limit = Math.min(200, parseInt(searchParams.get("limit") ?? "50", 10));
 
   if (!q) return NextResponse.json({ results: [] });
@@ -18,7 +19,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const results = searchMessages(ftsQuery, { type, chat, limit });
+    const results = searchMessages(ftsQuery, { type, chat, limit, includeArchived });
     return NextResponse.json({ results });
   } catch (err) {
     return NextResponse.json(

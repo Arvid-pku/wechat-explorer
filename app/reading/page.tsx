@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { getDb } from "@/lib/db";
+import { excludedSubquery } from "@/lib/queries";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ExternalLink, BookOpen } from "lucide-react";
 import { format } from "date-fns";
+import { ArchivedToggle, buildArchivedToggleHref } from "@/components/archived-toggle";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +29,14 @@ function dayParam(ts: number): string {
   ).padStart(2, "0")}`;
 }
 
-export default async function ReadingPage() {
+export default async function ReadingPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ archived?: string }>;
+}) {
+  const sp = await searchParams;
+  const includeArchived = sp.archived === "1";
+  const excl = excludedSubquery({ includeArchived });
   const db = getDb();
   const placeholders = READING_GROUPS.map(() => "?").join(",");
   const items = db
@@ -35,6 +44,7 @@ export default async function ReadingPage() {
       `SELECT id, url, domain_group, chat_display, chat_username, sender, timestamp, preview
        FROM urls_dedup
        WHERE domain_group IN (${placeholders})
+         AND chat_username NOT IN ${excl}
        ORDER BY timestamp DESC
        LIMIT 80`,
     )
@@ -42,11 +52,18 @@ export default async function ReadingPage() {
 
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-8 space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Reading queue</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Recent long-form links shared with you — articles, posts, threads.
-        </p>
+      <header className="flex items-end justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Reading queue</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Recent long-form links shared with you — articles, posts, threads
+            {includeArchived ? " (including archived)" : ""}.
+          </p>
+        </div>
+        <ArchivedToggle
+          on={includeArchived}
+          href={buildArchivedToggleHref("/reading", sp, includeArchived)}
+        />
       </header>
 
       <Card>

@@ -15,13 +15,14 @@ export async function GET(
   }
   const url = new URL(request.url);
   const chat = url.searchParams.get("chat");
+  const includeArchived = url.searchParams.get("archived") === "1";
 
-  const recap = getYearRecap(year, chat);
+  const recap = getYearRecap(year, chat, { includeArchived });
   const html = renderRecapHtml(recap);
 
   const subject = chat ? `${(recap.scopeDisplay ?? chat).slice(0, 40)}` : "all";
   const safe = subject.replace(/[^A-Za-z0-9_\-一-龥]+/g, "_");
-  const filename = `recap-${year}-${safe}.html`;
+  const filename = `recap-${year}-${safe}${includeArchived ? "-with-archived" : ""}.html`;
 
   return new NextResponse(html, {
     status: 200,

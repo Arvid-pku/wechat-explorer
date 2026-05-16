@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ArrowLeft, ExternalLink, Download } from "lucide-react";
 import { format } from "date-fns";
+import { ArchivedToggle, buildArchivedToggleHref } from "@/components/archived-toggle";
 
 export const dynamic = "force-dynamic";
 
@@ -15,12 +16,13 @@ export default async function LinksGroupPage({
   searchParams,
 }: {
   params: Promise<{ group: string }>;
-  searchParams: Promise<{ sender?: string; chat?: string; page?: string; q?: string }>;
+  searchParams: Promise<{ sender?: string; chat?: string; page?: string; q?: string; archived?: string }>;
 }) {
   const { group } = await params;
   const sp = await searchParams;
   const decoded = decodeURIComponent(group);
   const page = Math.max(0, parseInt(sp.page ?? "0", 10));
+  const includeArchived = sp.archived === "1";
 
   const items = getLinksInGroup(decoded, {
     sender: sp.sender,
@@ -28,8 +30,9 @@ export default async function LinksGroupPage({
     q: sp.q,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
+    includeArchived,
   });
-  const facets = getLinkGroupFacets(decoded);
+  const facets = getLinkGroupFacets(decoded, { includeArchived });
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-6">
@@ -46,9 +49,14 @@ export default async function LinksGroupPage({
           <p className="text-sm text-muted-foreground mt-1">
             {items.length.toLocaleString()} links shown
             {(sp.sender || sp.chat || sp.q) && " (filtered)"}
+            {includeArchived ? " (including archived)" : ""}
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <ArchivedToggle
+            on={includeArchived}
+            href={buildArchivedToggleHref(`/links/${group}`, sp, includeArchived)}
+          />
           <a
             href={`/api/export/links?group=${encodeURIComponent(decoded)}&format=csv`}
             className="inline-flex items-center gap-1 rounded-md border border-border/60 px-3 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent"

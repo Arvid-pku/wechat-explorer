@@ -22,6 +22,7 @@ import { Separator } from "@/components/ui/separator";
 import { HeatmapClient } from "./client";
 import { HourlyHeatmap } from "@/components/charts/hourly-heatmap";
 import { KeywordCloud } from "@/components/charts/keyword-cloud";
+import { ArchivedToggle, buildArchivedToggleHref } from "@/components/archived-toggle";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +41,7 @@ function isValidDay(s: string | undefined, year: number): s is string {
 export default async function CalendarPage({
   searchParams,
 }: {
-  searchParams: Promise<{ year?: string; day?: string }>;
+  searchParams: Promise<{ year?: string; day?: string; archived?: string }>;
 }) {
   const sp = await searchParams;
   const covered = getCoveredYears();
@@ -51,9 +52,10 @@ export default async function CalendarPage({
       ? parsedYear
       : defaultYear;
   const day = isValidDay(sp.day, year) ? sp.day : undefined;
+  const includeArchived = sp.archived === "1";
 
-  const data = getHeatmap(year);
-  const summary = getYearSummary(year);
+  const data = getHeatmap(year, { includeArchived });
+  const summary = getYearSummary(year, { includeArchived });
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-6">
@@ -80,20 +82,30 @@ export default async function CalendarPage({
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center gap-1">
-            {covered.map((y) => (
-              <Link
-                key={y}
-                href={`/calendar?year=${y}${day && day.startsWith(String(y)) ? `&day=${day}` : ""}`}
-                className={`rounded-md border border-border/60 px-3 py-1 text-sm hover:bg-accent ${
-                  y === year ? "bg-accent" : ""
-                }`}
-              >
-                {y}
-              </Link>
-            ))}
+            {covered.map((y) => {
+              const params = new URLSearchParams();
+              params.set("year", String(y));
+              if (day && day.startsWith(String(y))) params.set("day", day);
+              if (includeArchived) params.set("archived", "1");
+              return (
+                <Link
+                  key={y}
+                  href={`/calendar?${params.toString()}`}
+                  className={`rounded-md border border-border/60 px-3 py-1 text-sm hover:bg-accent ${
+                    y === year ? "bg-accent" : ""
+                  }`}
+                >
+                  {y}
+                </Link>
+              );
+            })}
           </div>
+          <ArchivedToggle
+            on={includeArchived}
+            href={buildArchivedToggleHref("/calendar", sp, includeArchived)}
+          />
           <Link
-            href={`/recap/${year}`}
+            href={`/recap/${year}${includeArchived ? "?archived=1" : ""}`}
             className="rounded-md border border-border/60 px-3 py-1 text-sm hover:bg-accent"
           >
             View {year} Recap →
@@ -112,9 +124,9 @@ export default async function CalendarPage({
       </Card>
 
       {day ? (
-        <DayDetail day={day} year={year} />
+        <DayDetail day={day} year={year} includeArchived={includeArchived} />
       ) : (
-        <YearOverview year={year} summary={summary} />
+        <YearOverview year={year} summary={summary} includeArchived={includeArchived} />
       )}
     </div>
   );
@@ -123,11 +135,13 @@ export default async function CalendarPage({
 function YearOverview({
   year,
   summary,
+  includeArchived,
 }: {
   year: number;
   summary: ReturnType<typeof getYearSummary>;
+  includeArchived: boolean;
 }) {
-  const yearKeywords = getYearKeywords(year);
+  const yearKeywords = getYearKeywords(year, { includeArchived });
   return (
     <div className="grid gap-6 md:grid-cols-3">
       <Card className="md:col-span-2">
@@ -194,12 +208,12 @@ function SummaryRow({ label, value }: { label: string; value: React.ReactNode })
   );
 }
 
-function DayDetail({ day, year }: { day: string; year: number }) {
-  const groups = getDayMessagesGrouped(day);
-  const hourly = getDayHourly(day);
-  const keywords = getDayKeywords(day, year);
+function DayDetail({ day, year, includeArchived }: { day: string; year: number; includeArchived: boolean }) {
+  const groups = getDayMessagesGrouped(day, { includeArchived });
+  const hourly = getDayHourly(day, { includeArchived });
+  const keywords = getDayKeywords(day, year, { includeArchived });
   const monthDay = day.slice(5);
-  const onThisDay = getOnThisDay(monthDay, year, 6);
+  const onThisDay = getOnThisDay(monthDay, year, 6, { includeArchived });
   const total = hourly.reduce((a, b) => a + b.n, 0);
 
   const headerDate = (() => {

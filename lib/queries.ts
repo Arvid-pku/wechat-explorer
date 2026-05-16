@@ -5,8 +5,18 @@ import { getDb, getMeta, setMeta } from "./db";
  * official-account OR folded. Use this in queries that should reflect the
  * user's *active personal* chat history. Reading and the contact-type tabs
  * intentionally bypass this exclusion to remain navigable.
+ *
+ * `EXCLUDED_SUBQUERY` (constant) keeps the old call-sites compiling.
+ * Prefer the function form `excludedSubquery({ includeArchived })` for new
+ * code that wants to let users opt in to including archived chats.
  */
 export const EXCLUDED_SUBQUERY = `(SELECT username FROM sessions WHERE archived = 1 OR chat_type IN ('official','folded'))`;
+
+export function excludedSubquery({ includeArchived = false }: { includeArchived?: boolean } = {}): string {
+  return includeArchived
+    ? `(SELECT username FROM sessions WHERE chat_type IN ('official','folded'))`
+    : EXCLUDED_SUBQUERY;
+}
 
 const ME_HANDLES_KEY = "me_handles";
 const ME_BACKFILLED_AT_KEY = "my_msg_count_backfilled_at";
@@ -356,20 +366,22 @@ export function getSessionByUsername(username: string) {
  * the URL row's unique index on (content_hash, url) doesn't dedupe. The
  * view collapses (url, ts, sender, chat) → one row.
  */
-export function getLinkGroups(): { domain_group: string; n: number; latest_ts: number }[] {
+export function getLinkGroups(opts: { includeArchived?: boolean } = {}): { domain_group: string; n: number; latest_ts: number }[] {
   const db = getDb();
+  const excl = excludedSubquery(opts);
   return db.prepare(`
     SELECT domain_group, COUNT(*) AS n, MAX(timestamp) AS latest_ts
     FROM urls_dedup
-    WHERE chat_username NOT IN ${EXCLUDED_SUBQUERY}
+    WHERE chat_username NOT IN ${excl}
     GROUP BY domain_group
     ORDER BY n DESC
   `).all() as { domain_group: string; n: number; latest_ts: number }[];
 }
 
-export function getLinksInGroup(group: string, opts: { limit?: number; offset?: number; sender?: string; chat?: string; q?: string } = {}) {
+export function getLinksInGroup(group: string, opts: { limit?: number; offset?: number; sender?: string; chat?: string; q?: string; includeArchived?: boolean } = {}) {
   const db = getDb();
-  const conditions = [`domain_group = ?`, `chat_username NOT IN ${EXCLUDED_SUBQUERY}`];
+  const excl = excludedSubquery(opts);
+  const conditions = [`domain_group = ?`, `chat_username NOT IN ${excl}`];
   const params: (string | number)[] = [group];
   if (opts.sender) {
     conditions.push("sender = ?");
@@ -403,25 +415,27 @@ export function getLinksInGroup(group: string, opts: { limit?: number; offset?: 
   }[];
 }
 
-export function getLinkGroupFacets(group: string): { senders: { sender: string; n: number }[]; chats: { chat_display: string; n: number }[] } {
+export function getLinkGroupFacets(group: string, opts: { includeArchived?: boolean } = {}): { senders: { sender: string; n: number }[]; chats: { chat_display: string; n: number }[] } {
   const db = getDb();
+  const excl = excludedSubquery(opts);
   const senders = db.prepare(
     `SELECT sender, COUNT(*) AS n FROM urls_dedup
-     WHERE domain_group = ? AND sender != '' AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
+     WHERE domain_group = ? AND sender != '' AND chat_username NOT IN ${excl}
      GROUP BY sender ORDER BY n DESC LIMIT 30`,
   ).all(group) as { sender: string; n: number }[];
   const chats = db.prepare(
     `SELECT chat_display, COUNT(*) AS n FROM urls_dedup
-     WHERE domain_group = ? AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
+     WHERE domain_group = ? AND chat_username NOT IN ${excl}
      GROUP BY chat_display ORDER BY n DESC LIMIT 30`,
   ).all(group) as { chat_display: string; n: number }[];
   return { senders, chats };
 }
 
-export function searchMessages(q: string, opts: { limit?: number; type?: string; chat?: string } = {}) {
+export function searchMessages(q: string, opts: { limit?: number; type?: string; chat?: string; includeArchived?: boolean } = {}) {
   const db = getDb();
   const trimmed = q.trim();
   if (!trimmed) return [];
+  const excl = excludedSubquery(opts);
 
   const limit = opts.limit ?? 100;
   const typeFilter = opts.type ? " AND m.msg_type = ?" : "";
@@ -458,7 +472,7 @@ export function searchMessages(q: string, opts: { limit?: number; type?: string;
         `SELECT m.id, m.chat_username, m.chat_display, m.sender, m.msg_type, m.content, m.timestamp
          FROM messages m
          WHERE m.content LIKE ? ESCAPE '\\'
-           AND m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
+           AND m.chat_username NOT IN ${excl}
            ${typeFilter}${chatFilter}
          ORDER BY m.timestamp DESC
          LIMIT ?`,
@@ -484,7 +498,7 @@ export function searchMessages(q: string, opts: { limit?: number; type?: string;
        FROM messages_fts
        JOIN messages m ON m.id = messages_fts.rowid
        WHERE messages_fts MATCH ?
-         AND m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
+         AND m.chat_username NOT IN ${excl}
          ${typeFilter}${chatFilter}
        ORDER BY m.timestamp DESC
        LIMIT ?`,
@@ -501,13 +515,14 @@ function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
-export function getHeatmap(year: number): { day: string; n: number }[] {
+export function getHeatmap(year: number, opts: { includeArchived?: boolean } = {}): { day: string; n: number }[] {
   const db = getDb();
+  const excl = excludedSubquery(opts);
   return db.prepare(`
     SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch', 'localtime') AS day, COUNT(*) AS n
     FROM messages
     WHERE strftime('%Y', timestamp, 'unixepoch', 'localtime') = ?
-      AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
+      AND chat_username NOT IN ${excl}
     GROUP BY day
     ORDER BY day
   `).all(String(year)) as { day: string; n: number }[];

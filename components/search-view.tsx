@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
+import { Archive } from "lucide-react";
 import Link from "next/link";
 
 interface Result {
@@ -25,6 +26,7 @@ export function SearchView() {
   const router = useRouter();
   const sp = useSearchParams();
   const initial = sp.get("q") ?? "";
+  const includeArchived = sp.get("archived") === "1";
   const [value, setValue] = useState(initial);
 
   useEffect(() => setValue(sp.get("q") ?? ""), [sp]);
@@ -32,10 +34,12 @@ export function SearchView() {
   const debounced = useDebounced(value, 250);
 
   const { data, isFetching, error } = useQuery({
-    queryKey: ["search", debounced],
+    queryKey: ["search", debounced, includeArchived],
     queryFn: async () => {
       if (!debounced.trim()) return { results: [] as Result[] };
-      const res = await fetch(`/api/search?q=${encodeURIComponent(debounced)}&limit=80`);
+      const params = new URLSearchParams({ q: debounced, limit: "80" });
+      if (includeArchived) params.set("archived", "1");
+      const res = await fetch(`/api/search?${params.toString()}`);
       return res.json() as Promise<{ results: Result[] }>;
     },
     enabled: true,
@@ -50,20 +54,47 @@ export function SearchView() {
     router.replace(target, { scroll: false });
   }, [debounced, router, sp]);
 
+  function toggleArchived() {
+    const next = new URLSearchParams(sp.toString());
+    if (includeArchived) next.delete("archived");
+    else next.set("archived", "1");
+    router.replace(`/search${next.toString() ? `?${next.toString()}` : ""}`, { scroll: false });
+  }
+
   return (
     <div className="space-y-4">
-      <div>
-        <Input
-          autoFocus
-          placeholder="Search messages…"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          className="h-12 text-base"
-        />
-        <p className="text-xs text-muted-foreground mt-2">
-          Powered by SQLite FTS5 with trigram tokenizer — works for Chinese substrings as well.
-        </p>
+      <div className="flex items-end gap-2 flex-wrap">
+        <div className="flex-1 min-w-[260px]">
+          <Input
+            autoFocus
+            placeholder="Search messages…"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            className="h-12 text-base"
+          />
+        </div>
+        <button
+          onClick={toggleArchived}
+          className={
+            `inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+              includeArchived
+                ? "border-primary/40 bg-primary/10 text-primary"
+                : "border-border/60 text-muted-foreground hover:text-foreground hover:bg-accent"
+            }`
+          }
+          title={
+            includeArchived
+              ? "Including archived chats in results"
+              : "Click to also search archived chats"
+          }
+        >
+          <Archive className="size-3.5" />
+          {includeArchived ? "Archived shown" : "Include archived"}
+        </button>
       </div>
+      <p className="text-xs text-muted-foreground">
+        Powered by SQLite FTS5 with trigram tokenizer — short CJK queries fall back to LIKE.
+      </p>
 
       {error && (
         <Card>

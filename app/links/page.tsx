@@ -3,6 +3,7 @@ import { getLinkGroups } from "@/lib/queries";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDistanceToNow } from "date-fns";
 import { LinkIcon } from "lucide-react";
+import { ArchivedToggle, buildArchivedToggleHref } from "@/components/archived-toggle";
 
 export const dynamic = "force-dynamic";
 
@@ -28,22 +29,38 @@ const GROUP_LABELS: Record<string, string> = {
   "hackernews": "Hacker News",
 };
 
-export default async function LinksIndex() {
-  const groups = getLinkGroups();
+export default async function LinksIndex({
+  searchParams,
+}: {
+  searchParams: Promise<{ archived?: string }>;
+}) {
+  const sp = await searchParams;
+  const includeArchived = sp.archived === "1";
+  const groups = getLinkGroups({ includeArchived });
   const grandTotal = groups.reduce((a, b) => a + b.n, 0);
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Links</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          {grandTotal.toLocaleString()} shared links across {groups.length.toLocaleString()} domain groups
-        </p>
+      <header className="flex items-end justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Links</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {grandTotal.toLocaleString()} shared links across {groups.length.toLocaleString()} domain groups
+            {includeArchived ? " (including archived)" : ""}
+          </p>
+        </div>
+        <ArchivedToggle
+          on={includeArchived}
+          href={buildArchivedToggleHref("/links", sp, includeArchived)}
+        />
       </header>
 
       <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(220px,1fr))]">
         {groups.map((g) => (
-          <Link key={g.domain_group} href={`/links/${encodeURIComponent(g.domain_group)}`}>
+          <Link
+            key={g.domain_group}
+            href={`/links/${encodeURIComponent(g.domain_group)}${includeArchived ? "?archived=1" : ""}`}
+          >
             <Card className="h-full transition-all hover:border-primary/40 hover:shadow-sm">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm flex items-center gap-2">

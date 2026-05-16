@@ -11,7 +11,7 @@
  */
 
 import { getDb } from "./db";
-import { EXCLUDED_SUBQUERY, getMeHandles } from "./queries";
+import { EXCLUDED_SUBQUERY, excludedSubquery, getMeHandles } from "./queries";
 import {
   tokenize,
   topByCount,
@@ -138,16 +138,18 @@ interface Scope {
   yearStart: number;
   yearEnd: number;
   username: string | null;
+  /** Pre-built `... NOT IN (...)` clause respecting includeArchived. */
   exclusionClause: string;
+  /** Reusable subquery for ad-hoc clauses inside the function. */
+  excl: string;
 }
 
-function buildScope(year: number, chatUsername: string | null): Scope {
+function buildScope(year: number, chatUsername: string | null, includeArchived = false): Scope {
   const yearStart = Math.floor(new Date(`${year}-01-01T00:00:00`).getTime() / 1000);
   const yearEnd = Math.floor(new Date(`${year + 1}-01-01T00:00:00`).getTime() / 1000);
-  const exclusionClause = chatUsername
-    ? `chat_username = ?`
-    : `chat_username NOT IN ${EXCLUDED_SUBQUERY}`;
-  return { yearStart, yearEnd, username: chatUsername, exclusionClause };
+  const excl = excludedSubquery({ includeArchived });
+  const exclusionClause = chatUsername ? `chat_username = ?` : `chat_username NOT IN ${excl}`;
+  return { yearStart, yearEnd, username: chatUsername, exclusionClause, excl };
 }
 
 function scopedParams(scope: Scope, extra: (string | number)[] = []): (string | number)[] {
@@ -167,14 +169,16 @@ const RECAP_TTL_MS = 5 * 60_000;
 export function getYearRecap(
   year: number,
   chatUsername: string | null = null,
+  opts: { includeArchived?: boolean } = {},
 ): YearRecap {
-  const cacheKey = `${year}::${chatUsername ?? ""}`;
+  const includeArchived = !!opts.includeArchived;
+  const cacheKey = `${year}::${chatUsername ?? ""}::${includeArchived ? "1" : "0"}`;
   const cached = _recapCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < RECAP_TTL_MS) {
     return cached.recap;
   }
 
-  const recap = computeRecap(year, chatUsername);
+  const recap = computeRecap(year, chatUsername, includeArchived);
   _recapCache.set(cacheKey, { recap, ts: Date.now() });
   return recap;
 }
@@ -182,9 +186,10 @@ export function getYearRecap(
 function computeRecap(
   year: number,
   chatUsername: string | null,
+  includeArchived: boolean,
 ): YearRecap {
   const db = getDb();
-  const scope = buildScope(year, chatUsername);
+  const scope = buildScope(year, chatUsername, includeArchived);
   const meHandles = getMeHandles();
   const meSet = new Set(meHandles);
   const meIn = meHandles.length
@@ -296,7 +301,7 @@ function computeRecap(
            FROM messages m
            JOIN sessions s ON s.username = m.chat_username
            WHERE m.timestamp >= ? AND m.timestamp < ?
-             AND m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
+             AND m.chat_username NOT IN ${scope.excl}
              AND s.chat_type = 'private'
            GROUP BY s.username
            ORDER BY n DESC
@@ -325,7 +330,7 @@ function computeRecap(
            FROM messages m
            JOIN sessions s ON s.username = m.chat_username
            WHERE m.timestamp >= ? AND m.timestamp < ?
-             AND m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
+             AND m.chat_username NOT IN ${scope.excl}
              AND s.chat_type = 'group'
            GROUP BY s.username
            ORDER BY n DESC
@@ -345,7 +350,7 @@ function computeRecap(
       `SELECT domain_group, COUNT(*) AS n
        FROM urls_dedup
        WHERE timestamp >= ? AND timestamp < ?
-         AND ${chatUsername ? "chat_username = ?" : `chat_username NOT IN ${EXCLUDED_SUBQUERY}`}
+         AND ${chatUsername ? "chat_username = ?" : `chat_username NOT IN ${scope.excl}`}
        GROUP BY domain_group
        ORDER BY n DESC
        LIMIT 25`,
@@ -394,7 +399,7 @@ function computeRecap(
           `SELECT s.username, s.display_name, s.chat_type, MIN(m.timestamp) AS first_ts, COUNT(*) AS n
            FROM messages m
            JOIN sessions s ON s.username = m.chat_username
-           WHERE m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
+           WHERE m.chat_username NOT IN ${scope.excl}
            GROUP BY s.username
            HAVING first_ts >= ? AND first_ts < ?
            ORDER BY first_ts ASC
@@ -535,7 +540,7 @@ function computeRecap(
       `SELECT content
        FROM messages
        WHERE (timestamp < ? OR timestamp >= ?)
-         AND ${chatUsername ? "chat_username = ?" : `chat_username NOT IN ${EXCLUDED_SUBQUERY}`}
+         AND ${chatUsername ? "chat_username = ?" : `chat_username NOT IN ${scope.excl}`}
          AND msg_type IN ('文本','text','文字')
          AND length(content) > 0
          AND (id % 10) = 0
@@ -806,9 +811,10 @@ export interface YearBaseline {
 export function getYearBaseline(
   year: number,
   chatUsername: string | null = null,
+  opts: { includeArchived?: boolean } = {},
 ): YearBaseline {
   const db = getDb();
-  const scope = buildScope(year, chatUsername);
+  const scope = buildScope(year, chatUsername, !!opts.includeArchived);
   const totals = db
     .prepare(
       `SELECT COUNT(*) AS n,
@@ -827,7 +833,7 @@ export function getYearBaseline(
     .prepare(
       `SELECT COUNT(*) AS n FROM urls_dedup
        WHERE timestamp >= ? AND timestamp < ?
-         AND ${chatUsername ? "chat_username = ?" : `chat_username NOT IN ${EXCLUDED_SUBQUERY}`}`,
+         AND ${chatUsername ? "chat_username = ?" : `chat_username NOT IN ${scope.excl}`}`,
     )
     .get(scope.yearStart, scope.yearEnd, ...scopedParams(scope)) as { n: number };
 
@@ -838,7 +844,7 @@ export function getYearBaseline(
         `SELECT s.display_name FROM messages m
          JOIN sessions s ON s.username = m.chat_username
          WHERE m.timestamp >= ? AND m.timestamp < ?
-           AND m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
+           AND m.chat_username NOT IN ${scope.excl}
            AND s.chat_type = 'private'
          GROUP BY s.username
          ORDER BY COUNT(*) DESC
