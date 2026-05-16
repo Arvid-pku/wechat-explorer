@@ -106,14 +106,32 @@ export function SearchView() {
                       </span>
                     )}
                     <span>·</span>
-                    <span>{r.sender || "—"}</span>
+                    {r.sender ? (
+                      <Link
+                        href={`/search?q=${encodeURIComponent(r.sender)}`}
+                        className="hover:text-foreground hover:underline"
+                        title={`Search for ${r.sender}`}
+                      >
+                        {r.sender}
+                      </Link>
+                    ) : (
+                      <span>—</span>
+                    )}
                     <Badge variant="outline" className="text-[10px] font-normal">
                       {r.msg_type}
                     </Badge>
                     <span>·</span>
-                    <span className="tabular-nums">
+                    <Link
+                      href={(() => {
+                        const d = new Date(r.timestamp * 1000);
+                        const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                        return `/calendar?year=${d.getFullYear()}&day=${day}`;
+                      })()}
+                      className="tabular-nums hover:text-foreground hover:underline"
+                      title="Open this day in the calendar"
+                    >
                       {format(new Date(r.timestamp * 1000), "MMM d, yyyy HH:mm")}
-                    </span>
+                    </Link>
                   </div>
                   <p
                     className="text-sm mt-1 break-words [&_mark]:bg-amber-200/60 [&_mark]:rounded [&_mark]:px-0.5 [&_mark]:text-foreground dark:[&_mark]:bg-amber-500/30"

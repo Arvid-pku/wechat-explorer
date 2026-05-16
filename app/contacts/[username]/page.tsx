@@ -365,25 +365,42 @@ export default async function ContactDetailPage({
                 pull messages.
               </p>
             ) : (
-              a.recent.map((m) => (
+              a.recent.map((m) => {
+                const d = new Date(m.timestamp * 1000);
+                const dayStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                return (
                 <div key={m.id} className="space-y-1">
                   <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
-                    <span
-                      className={`font-medium ${m.isMine ? "text-primary" : "text-foreground"}`}
-                    >
-                      {m.isMine ? "You" : m.sender || "—"}
-                    </span>
+                    {m.isMine || !m.sender ? (
+                      <span
+                        className={`font-medium ${m.isMine ? "text-primary" : "text-foreground"}`}
+                      >
+                        {m.isMine ? "You" : "—"}
+                      </span>
+                    ) : (
+                      <Link
+                        href={`/search?q=${encodeURIComponent(m.sender)}`}
+                        className="font-medium text-foreground hover:underline"
+                      >
+                        {m.sender}
+                      </Link>
+                    )}
                     <Badge variant="outline" className="text-[10px] font-normal">
                       {m.msg_type}
                     </Badge>
-                    <span className="tabular-nums">
-                      {format(new Date(m.timestamp * 1000), "MMM d, HH:mm")}
-                    </span>
+                    <Link
+                      href={`/calendar?year=${d.getFullYear()}&day=${dayStr}`}
+                      className="tabular-nums hover:text-foreground hover:underline"
+                      title="Open this day in the calendar"
+                    >
+                      {format(d, "MMM d, HH:mm")}
+                    </Link>
                   </div>
                   <p className="text-sm whitespace-pre-wrap break-words">{m.content}</p>
                   <Separator className="mt-3" />
                 </div>
-              ))
+              );
+              })
             )}
           </CardContent>
         </Card>

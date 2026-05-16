@@ -372,9 +372,16 @@ function ChatGroupCard({
           group.sample.map((m) => (
             <div key={m.id} className="px-3 py-2 text-sm space-y-1">
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">
-                  {m.sender || "—"}
-                </span>
+                {m.sender ? (
+                  <Link
+                    href={`/search?q=${encodeURIComponent(m.sender)}`}
+                    className="font-medium text-foreground hover:underline"
+                  >
+                    {m.sender}
+                  </Link>
+                ) : (
+                  <span className="font-medium text-foreground">—</span>
+                )}
                 <Separator orientation="vertical" className="h-3" />
                 <span>{m.msg_type || "—"}</span>
                 <Separator orientation="vertical" className="h-3" />

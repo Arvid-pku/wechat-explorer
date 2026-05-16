@@ -14,9 +14,17 @@ interface ReadingItem {
   url: string;
   domain_group: string;
   chat_display: string;
+  chat_username: string | null;
   sender: string;
   timestamp: number;
   preview: string;
+}
+
+function dayParam(ts: number): string {
+  const d = new Date(ts * 1000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate(),
+  ).padStart(2, "0")}`;
 }
 
 export default async function ReadingPage() {
@@ -24,7 +32,7 @@ export default async function ReadingPage() {
   const placeholders = READING_GROUPS.map(() => "?").join(",");
   const items = db
     .prepare(
-      `SELECT id, url, domain_group, chat_display, sender, timestamp, preview
+      `SELECT id, url, domain_group, chat_display, chat_username, sender, timestamp, preview
        FROM urls_dedup
        WHERE domain_group IN (${placeholders})
        ORDER BY timestamp DESC
@@ -76,16 +84,52 @@ export default async function ReadingPage() {
                   <ExternalLink className="size-3 shrink-0 mt-0.5 text-muted-foreground" />
                 </a>
                 <div className="mt-1.5 flex items-center gap-2 flex-wrap text-xs text-muted-foreground">
-                  <Badge variant="outline" className="text-[10px] font-normal">
-                    {u.domain_group}
-                  </Badge>
-                  <span>{u.sender || "—"}</span>
+                  <Link
+                    href={`/links/${encodeURIComponent(u.domain_group)}`}
+                    className="hover:text-foreground"
+                    title={`All ${u.domain_group} links`}
+                  >
+                    <Badge variant="outline" className="text-[10px] font-normal hover:bg-accent cursor-pointer">
+                      {u.domain_group}
+                    </Badge>
+                  </Link>
+                  {u.sender ? (
+                    <Link
+                      href={`/links/${encodeURIComponent(u.domain_group)}?sender=${encodeURIComponent(u.sender)}`}
+                      className="hover:text-foreground hover:underline"
+                      title={`All ${u.domain_group} from ${u.sender}`}
+                    >
+                      {u.sender}
+                    </Link>
+                  ) : (
+                    <span>—</span>
+                  )}
                   <span>·</span>
-                  <span className="truncate max-w-[40ch]">{u.chat_display}</span>
+                  {u.chat_username ? (
+                    <Link
+                      href={`/contacts/${encodeURIComponent(u.chat_username)}`}
+                      className="truncate max-w-[40ch] hover:text-foreground hover:underline"
+                      title={`Open ${u.chat_display}`}
+                    >
+                      {u.chat_display}
+                    </Link>
+                  ) : (
+                    <Link
+                      href={`/links/${encodeURIComponent(u.domain_group)}?chat=${encodeURIComponent(u.chat_display)}`}
+                      className="truncate max-w-[40ch] hover:text-foreground hover:underline"
+                      title={`All ${u.domain_group} in ${u.chat_display}`}
+                    >
+                      {u.chat_display}
+                    </Link>
+                  )}
                   <span>·</span>
-                  <span className="tabular-nums">
+                  <Link
+                    href={`/calendar?year=${dayParam(u.timestamp).slice(0, 4)}&day=${dayParam(u.timestamp)}`}
+                    className="tabular-nums hover:text-foreground hover:underline"
+                    title="Open this day in the calendar"
+                  >
                     {format(new Date(u.timestamp * 1000), "MMM d, HH:mm")}
-                  </span>
+                  </Link>
                 </div>
               </div>
             ))
