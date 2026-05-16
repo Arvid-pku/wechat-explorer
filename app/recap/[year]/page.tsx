@@ -11,7 +11,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Download, Sparkles, Calendar, ExternalLink } from "lucide-react";
 import { getYearRecap, getRecapYears, getYearBaseline } from "@/lib/recap";
-import { ArchivedToggle, buildArchivedToggleHref } from "@/components/archived-toggle";
+import { ArchivedFilterPill, buildArchivedFilterHref } from "@/components/archived-filter-pill";
 import { formatLatency } from "@/lib/latency";
 import { MonthlyBars } from "@/components/charts/recap/monthly-bars";
 import { HourlyGrid } from "@/components/charts/recap/hourly-grid";
@@ -95,9 +95,9 @@ export default async function RecapPage({
                 {y}
               </Link>
             ))}
-            <ArchivedToggle
+            <ArchivedFilterPill
               on={includeArchived}
-              href={buildArchivedToggleHref(`/recap/${year}`, sp, includeArchived)}
+              href={buildArchivedFilterHref(`/recap/${year}`, sp, includeArchived)}
             />
 
             <a

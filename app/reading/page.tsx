@@ -1,41 +1,50 @@
 import Link from "next/link";
 import { getDb } from "@/lib/db";
-import { excludedSubquery } from "@/lib/queries";
+import { excludedSubquery, getReadUrlIds } from "@/lib/queries";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { ExternalLink, BookOpen } from "lucide-react";
-import { format } from "date-fns";
-import { ArchivedToggle, buildArchivedToggleHref } from "@/components/archived-toggle";
+import { BookOpen } from "lucide-react";
+import { ArchivedFilterPill, buildArchivedFilterHref } from "@/components/archived-filter-pill";
+import { ReadingList, type ReadingItem } from "./reading-list";
 
 export const dynamic = "force-dynamic";
 
 const READING_GROUPS = ["wechat-article", "xiaohongshu", "zhihu", "medium", "substack"];
 
-interface ReadingItem {
-  id: number;
-  url: string;
-  domain_group: string;
-  chat_display: string;
-  chat_username: string | null;
-  sender: string;
-  timestamp: number;
-  preview: string;
+type FilterKey = "all" | "unread" | "read";
+
+const FILTER_OPTIONS: { key: FilterKey; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "unread", label: "Unread" },
+  { key: "read", label: "Read" },
+];
+
+function parseFilter(v: string | undefined): FilterKey {
+  if (v === "unread" || v === "read") return v;
+  return "all";
 }
 
-function dayParam(ts: number): string {
-  const d = new Date(ts * 1000);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate(),
-  ).padStart(2, "0")}`;
+function buildFilterHref(
+  base: string,
+  sp: Record<string, string | undefined>,
+  filter: FilterKey,
+): string {
+  const next = new URLSearchParams();
+  for (const [k, v] of Object.entries(sp)) {
+    if (v && k !== "filter") next.set(k, v);
+  }
+  if (filter !== "all") next.set("filter", filter);
+  const qs = next.toString();
+  return qs ? `${base}?${qs}` : base;
 }
 
 export default async function ReadingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ archived?: string }>;
+  searchParams: Promise<{ archived?: string; filter?: string }>;
 }) {
   const sp = await searchParams;
   const includeArchived = sp.archived === "1";
+  const filter = parseFilter(sp.filter);
   const excl = excludedSubquery({ includeArchived });
   const db = getDb();
   const placeholders = READING_GROUPS.map(() => "?").join(",");
@@ -44,11 +53,15 @@ export default async function ReadingPage({
       `SELECT id, url, domain_group, chat_display, chat_username, sender, timestamp, preview
        FROM urls_dedup
        WHERE domain_group IN (${placeholders})
-         AND chat_username NOT IN ${excl}
+         AND (chat_username IS NULL OR chat_username NOT IN ${excl})
        ORDER BY timestamp DESC
        LIMIT 80`,
     )
     .all(...READING_GROUPS) as ReadingItem[];
+  const readIds = Array.from(getReadUrlIds());
+  const readSetForCount = new Set(readIds);
+  const readCount = items.reduce((a, it) => (readSetForCount.has(it.id) ? a + 1 : a), 0);
+  const unreadCount = items.length - readCount;
 
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-8 space-y-6">
@@ -60,11 +73,33 @@ export default async function ReadingPage({
             {includeArchived ? " (including archived)" : ""}.
           </p>
         </div>
-        <ArchivedToggle
+        <ArchivedFilterPill
           on={includeArchived}
-          href={buildArchivedToggleHref("/reading", sp, includeArchived)}
+          href={buildArchivedFilterHref("/reading", sp, includeArchived)}
         />
       </header>
+
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {FILTER_OPTIONS.map((opt) => {
+          const active = filter === opt.key;
+          const count =
+            opt.key === "unread" ? unreadCount : opt.key === "read" ? readCount : items.length;
+          return (
+            <Link
+              key={opt.key}
+              href={buildFilterHref("/reading", sp, opt.key)}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                active
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-border/60 text-muted-foreground hover:text-foreground hover:bg-accent"
+              }`}
+            >
+              {opt.label}
+              <span className="tabular-nums opacity-70">{count}</span>
+            </Link>
+          );
+        })}
+      </div>
 
       <Card>
         <CardHeader className="pb-2">
@@ -82,75 +117,11 @@ export default async function ReadingPage({
                 {i < READING_GROUPS.length - 1 ? ", " : ""}
               </span>
             ))}
-            . Read tracking will land in a future iteration.
+            . Tick the checkbox to mark an item read.
           </CardDescription>
         </CardHeader>
-        <CardContent className="p-0 divide-y divide-border/40">
-          {items.length === 0 ? (
-            <p className="px-6 py-12 text-center text-sm text-muted-foreground">Nothing here yet.</p>
-          ) : (
-            items.map((u) => (
-              <div key={u.id} className="px-6 py-3 hover:bg-accent/40">
-                <a
-                  href={u.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm font-medium hover:underline inline-flex items-start gap-1 break-words"
-                >
-                  <span>{u.preview?.replace(/\[链接\]\s*/, "") || u.url}</span>
-                  <ExternalLink className="size-3 shrink-0 mt-0.5 text-muted-foreground" />
-                </a>
-                <div className="mt-1.5 flex items-center gap-2 flex-wrap text-xs text-muted-foreground">
-                  <Link
-                    href={`/links/${encodeURIComponent(u.domain_group)}`}
-                    className="hover:text-foreground"
-                    title={`All ${u.domain_group} links`}
-                  >
-                    <Badge variant="outline" className="text-[10px] font-normal hover:bg-accent cursor-pointer">
-                      {u.domain_group}
-                    </Badge>
-                  </Link>
-                  {u.sender ? (
-                    <Link
-                      href={`/links/${encodeURIComponent(u.domain_group)}?sender=${encodeURIComponent(u.sender)}`}
-                      className="hover:text-foreground hover:underline"
-                      title={`All ${u.domain_group} from ${u.sender}`}
-                    >
-                      {u.sender}
-                    </Link>
-                  ) : (
-                    <span>—</span>
-                  )}
-                  <span>·</span>
-                  {u.chat_username ? (
-                    <Link
-                      href={`/contacts/${encodeURIComponent(u.chat_username)}`}
-                      className="truncate max-w-[40ch] hover:text-foreground hover:underline"
-                      title={`Open ${u.chat_display}`}
-                    >
-                      {u.chat_display}
-                    </Link>
-                  ) : (
-                    <Link
-                      href={`/links/${encodeURIComponent(u.domain_group)}?chat=${encodeURIComponent(u.chat_display)}`}
-                      className="truncate max-w-[40ch] hover:text-foreground hover:underline"
-                      title={`All ${u.domain_group} in ${u.chat_display}`}
-                    >
-                      {u.chat_display}
-                    </Link>
-                  )}
-                  <span>·</span>
-                  <Link
-                    href={`/calendar?year=${dayParam(u.timestamp).slice(0, 4)}&day=${dayParam(u.timestamp)}`}
-                    className="tabular-nums hover:text-foreground hover:underline"
-                    title="Open this day in the calendar"
-                  >
-                    {format(new Date(u.timestamp * 1000), "MMM d, HH:mm")}
-                  </Link>
-                </div>
-              </div>
-            ))
-          )}
+        <CardContent className="p-0">
+          <ReadingList items={items} readIds={readIds} filter={filter} />
         </CardContent>
       </Card>
     </div>

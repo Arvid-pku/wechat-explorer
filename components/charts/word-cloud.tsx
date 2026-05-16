@@ -9,9 +9,15 @@ interface Props {
   words: ScoredWord[];
   minSize?: number;
   maxSize?: number;
+  /**
+   * When set, every word links into a chat-scoped search instead of the
+   * global one. Used by the contact-detail page so the topic cloud carries
+   * its context forward.
+   */
+  chatUsername?: string;
 }
 
-export function WordCloud({ words, minSize = 11, maxSize = 24 }: Props) {
+export function WordCloud({ words, minSize = 11, maxSize = 24, chatUsername }: Props) {
   if (words.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -26,10 +32,13 @@ export function WordCloud({ words, minSize = 11, maxSize = 24 }: Props) {
         const t = Math.max(0, Math.min(1, w.weight / top));
         const size = minSize + t * (maxSize - minSize);
         const opacity = 0.55 + 0.45 * t;
+        const href = chatUsername
+          ? `/search?q=${encodeURIComponent(w.word)}&chat=${encodeURIComponent(chatUsername)}`
+          : `/search?q=${encodeURIComponent(w.word)}`;
         return (
           <Link
             key={w.word}
-            href={`/search?q=${encodeURIComponent(w.word)}`}
+            href={href}
             className="font-medium hover:text-primary transition-colors break-all"
             style={{ fontSize: `${size}px`, opacity }}
             title={`${w.count.toLocaleString()} mentions`}

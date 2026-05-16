@@ -5,6 +5,9 @@ import { statSync } from "node:fs";
 import { ReindexButtons } from "./reindex-buttons";
 import { HygienePanel } from "./hygiene-panel";
 import { listArchiveCandidates, listArchived, ensureMeDetected, detectMeHandles, ensureDistinctSendersBackfilled } from "@/lib/queries";
+import { getCacheStats } from "@/lib/cache";
+import { CachePanel } from "./cache-panel";
+import { AlertTriangle } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -32,9 +35,19 @@ export default async function SettingsPage() {
          (SELECT COUNT(*) FROM sessions WHERE archived = 1) AS archived,
          (SELECT COUNT(*) FROM contacts) AS contacts,
          (SELECT COUNT(*) FROM messages) AS messages,
-         (SELECT COUNT(*) FROM urls) AS urls`,
+         (SELECT COUNT(*) FROM urls) AS urls,
+         (SELECT COUNT(*) FROM messages WHERE chat_username IS NULL) AS messages_unmatched,
+         (SELECT COUNT(*) FROM urls WHERE chat_username IS NULL) AS urls_unmatched`,
     )
-    .get() as { sessions: number; archived: number; contacts: number; messages: number; urls: number };
+    .get() as {
+    sessions: number;
+    archived: number;
+    contacts: number;
+    messages: number;
+    urls: number;
+    messages_unmatched: number;
+    urls_unmatched: number;
+  };
 
   const { handles: meHandles } = ensureMeDetected();
   ensureDistinctSendersBackfilled();
@@ -54,6 +67,7 @@ export default async function SettingsPage() {
     }
   }
   const archived = listArchived();
+  const cacheStats = getCacheStats();
 
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-8 space-y-6">
@@ -98,6 +112,24 @@ export default async function SettingsPage() {
             <dd className="text-right tabular-nums">{counts.contacts.toLocaleString()}</dd>
           </dl>
 
+          {(counts.messages_unmatched > 0 || counts.urls_unmatched > 0) && (
+            <div className="flex gap-3 items-start rounded-md border border-amber-500/30 bg-amber-50/60 dark:bg-amber-900/10 px-3 py-2.5 text-xs">
+              <AlertTriangle className="size-4 shrink-0 text-amber-600 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-medium text-amber-900 dark:text-amber-200">
+                  {counts.messages_unmatched.toLocaleString()} messages and{" "}
+                  {counts.urls_unmatched.toLocaleString()} URLs aren&apos;t linked to a session
+                </p>
+                <p className="text-muted-foreground">
+                  Backfill skips ambiguous matches — most often display names shared by
+                  multiple sessions in WeChat (e.g. several &ldquo;工作群&rdquo;).
+                  These rows are still searchable but won&apos;t roll up into a contact
+                  page. Rename the colliding contacts in WeChat to recover them.
+                </p>
+              </div>
+            </div>
+          )}
+
           <ReindexButtons />
         </CardContent>
       </Card>
@@ -108,6 +140,8 @@ export default async function SettingsPage() {
         meHandles={meHandles}
         meRankings={meRankings}
       />
+
+      <CachePanel stats={cacheStats} />
 
       <Card>
         <CardHeader>

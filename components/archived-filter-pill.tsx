@@ -2,13 +2,12 @@ import Link from "next/link";
 import { Archive } from "lucide-react";
 
 /**
- * Pill-style "Include archived" toggle shared by the search / links /
- * calendar / reading / recap pages. Server-rendered, navigates by setting
- * `archived=1` in the URL — no client component needed.
- *
- * Pass the current value plus a function that produces the next URL.
+ * Pill that toggles the "include archived chats" URL parameter on list pages
+ * (search / links / calendar / reading / recap / stats). Server-rendered;
+ * navigates by setting `archived=1`. Different from `ArchiveSessionButton`,
+ * which actually flips a single session's archived state via the API.
  */
-export function ArchivedToggle({
+export function ArchivedFilterPill({
   on,
   href,
   className,
@@ -37,10 +36,10 @@ export function ArchivedToggle({
 }
 
 /**
- * Tiny helper for building "toggle the archived param" URLs. Keeps the rest
- * of the existing searchParams in place.
+ * Build the "toggle archived param" URL while preserving the rest of the
+ * current searchParams.
  */
-export function buildArchivedToggleHref(
+export function buildArchivedFilterHref(
   base: string,
   sp: Record<string, string | undefined>,
   currentOn: boolean,

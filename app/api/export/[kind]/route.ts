@@ -62,7 +62,7 @@ export async function GET(
     case "links": {
       const group = url.searchParams.get("group");
       const limit = Math.min(50_000, Number(url.searchParams.get("limit") ?? 5000));
-      const filters: string[] = [`chat_username NOT IN ${EXCLUDED_SUBQUERY}`];
+      const filters: string[] = [`(chat_username IS NULL OR chat_username NOT IN ${EXCLUDED_SUBQUERY})`];
       const args: (string | number)[] = [];
       if (group) {
         filters.push("domain_group = ?");
@@ -109,7 +109,7 @@ export async function GET(
         .prepare(
           `SELECT domain_group, domain, COUNT(*) AS n, MAX(timestamp) AS latest_ts
            FROM urls_dedup
-           WHERE chat_username NOT IN ${EXCLUDED_SUBQUERY}
+           WHERE (chat_username IS NULL OR chat_username NOT IN ${EXCLUDED_SUBQUERY})
            GROUP BY domain_group, domain
            ORDER BY n DESC`,
         )

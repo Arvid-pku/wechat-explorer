@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { listSessions } from "@/lib/queries";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -11,23 +11,67 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDistanceToNow } from "date-fns";
-import { Users, MessageSquare, LinkIcon, Building, Folder, Download } from "lucide-react";
+import {
+  Users,
+  MessageSquare,
+  Building,
+  Folder,
+  Download,
+  X,
+  ArrowDown,
+  ArrowUp,
+  AlertCircle,
+} from "lucide-react";
+import {
+  ColumnHeader,
+  ColumnOption,
+  ColumnDivider,
+  ColumnSection,
+  ColumnSearchInput,
+} from "@/components/contacts/column-header";
 
 export const dynamic = "force-dynamic";
 
-const TYPES = [
-  { key: "all", label: "All", icon: Users },
-  { key: "private", label: "Private", icon: Users },
-  { key: "group", label: "Group", icon: MessageSquare },
-  { key: "official", label: "Official", icon: Building },
-  { key: "folded", label: "Folded", icon: Folder },
-];
-const SORTS = [
-  { key: "recent", label: "Recent" },
-  { key: "messages", label: "Messages" },
-  { key: "urls", label: "Links" },
-  { key: "name", label: "Name" },
-];
+const TYPE_OPTIONS = [
+  { key: "all", label: "All types", Icon: Users },
+  { key: "private", label: "Private", Icon: Users },
+  { key: "group", label: "Group", Icon: MessageSquare },
+  { key: "official", label: "Official", Icon: Building },
+  { key: "folded", label: "Folded", Icon: Folder },
+] as const;
+
+const VIEW_OPTIONS = [
+  { key: "active", label: "Active" },
+  { key: "archived", label: "Archived" },
+  { key: "all", label: "All" },
+] as const;
+
+interface SortInfo {
+  key: "name" | "type" | "messages" | "urls" | "recent";
+  direction: "asc" | "desc";
+}
+
+function parseSort(raw: string | undefined): SortInfo {
+  switch (raw) {
+    case "name":         return { key: "name", direction: "asc" };
+    case "name-desc":    return { key: "name", direction: "desc" };
+    case "messages":     return { key: "messages", direction: "desc" };
+    case "messages-asc": return { key: "messages", direction: "asc" };
+    case "urls":         return { key: "urls", direction: "desc" };
+    case "urls-asc":     return { key: "urls", direction: "asc" };
+    case "recent-asc":   return { key: "recent", direction: "asc" };
+    case "recent":
+    default:             return { key: "recent", direction: "desc" };
+  }
+}
+
+/** Encode a sort key+direction back to the URL value the queries layer reads. */
+function sortValue(key: SortInfo["key"], direction: "asc" | "desc"): string {
+  if (key === "recent") return direction === "desc" ? "recent" : "recent-asc";
+  if (key === "name") return direction === "asc" ? "name" : "name-desc";
+  // messages, urls
+  return direction === "desc" ? key : `${key}-asc`;
+}
 
 export default async function ContactsPage({
   searchParams,
@@ -36,18 +80,36 @@ export default async function ContactsPage({
 }) {
   const sp = await searchParams;
   const type = sp.type ?? "all";
-  const sort = sp.sort ?? "recent";
+  const sort = parseSort(sp.sort);
   const q = sp.q ?? "";
   const view = sp.view ?? "active";
 
   const rows = listSessions({
     type,
-    sort,
+    sort: sp.sort,
     q,
     limit: 300,
     onlyArchived: view === "archived",
     includeArchived: view === "all",
   });
+
+  /** Build a URL with the current params overridden. Pass null to strip a key. */
+  function href(overrides: Record<string, string | null>): string {
+    const base = { type, sort: sp.sort, q, view } as Record<string, string | undefined>;
+    const usp = new URLSearchParams();
+    for (const [k, v] of Object.entries(base)) {
+      if (v && !(k in overrides)) usp.set(k, v);
+    }
+    for (const [k, v] of Object.entries(overrides)) {
+      if (v !== null && v !== "") usp.set(k, v);
+    }
+    const qs = usp.toString();
+    return qs ? `/contacts?${qs}` : "/contacts";
+  }
+
+  const typeActive = type !== "all";
+  const filterCount =
+    (typeActive ? 1 : 0) + (q ? 1 : 0) + (view !== "active" ? 1 : 0);
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-6">
@@ -55,11 +117,23 @@ export default async function ContactsPage({
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">Contacts</h1>
           <p className="text-sm text-muted-foreground">
-            {rows.length.toLocaleString()} sessions matching current filters
+            {rows.length.toLocaleString()} session
+            {rows.length === 1 ? "" : "s"}
+            {filterCount > 0 && " matching filters"}
             {view === "archived" && " · viewing archived"}
+            {view === "all" && " · including archived"}
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {filterCount > 0 && (
+            <Link
+              href="/contacts"
+              className="inline-flex items-center gap-1 rounded-md border border-border/60 px-3 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent"
+              title="Clear all filters"
+            >
+              <X className="size-3.5" /> Clear
+            </Link>
+          )}
           <a
             href="/api/export/sessions?format=csv"
             className="inline-flex items-center gap-1 rounded-md border border-border/60 px-3 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent"
@@ -77,73 +151,185 @@ export default async function ContactsPage({
         </div>
       </header>
 
-      <div className="flex flex-wrap items-center gap-3 justify-between">
-        <div className="inline-flex items-center rounded-lg bg-muted p-[3px] text-sm">
-          {TYPES.map((t) => {
-            const Icon = t.icon;
-            const active = type === t.key;
-            return (
-              <Link
-                key={t.key}
-                href={`/contacts?${qs({ type: t.key, sort, q, view })}`}
-                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 font-medium transition-colors ${
-                  active
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <Icon className="size-3.5" />
-                {t.label}
-              </Link>
-            );
-          })}
+      {/* Active-filter chips so removing a single filter is one click without
+          having to re-open the column popover. */}
+      {(q || typeActive || view !== "active") && (
+        <div className="flex items-center gap-1.5 flex-wrap text-xs">
+          {q && (
+            <Chip label={`Name: ${q}`} href={href({ q: null })} />
+          )}
+          {typeActive && (
+            <Chip label={`Type: ${type}`} href={href({ type: null })} />
+          )}
+          {view !== "active" && (
+            <Chip label={`View: ${view}`} href={href({ view: null })} />
+          )}
         </div>
-        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          <div className="inline-flex rounded-md border border-border/60 p-[2px]">
-            {[
-              { key: "active", label: "Active" },
-              { key: "archived", label: "Archived" },
-              { key: "all", label: "All" },
-            ].map((v) => (
-              <Link
-                key={v.key}
-                href={`/contacts?${qs({ type, sort, q, view: v.key })}`}
-                className={`rounded px-2.5 py-1 ${
-                  view === v.key ? "bg-accent text-foreground" : "hover:text-foreground"
-                }`}
-              >
-                {v.label}
-              </Link>
-            ))}
-          </div>
-          <span>Sort:</span>
-          {SORTS.map((s) => (
-            <Link
-              key={s.key}
-              href={`/contacts?${qs({ type, sort: s.key, q, view })}`}
-              className={`rounded px-2 py-1 hover:bg-accent ${
-                sort === s.key ? "bg-accent text-foreground" : ""
-              }`}
-            >
-              {s.label}
-            </Link>
-          ))}
-        </div>
-      </div>
+      )}
 
       <Card className="p-0 overflow-hidden">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base font-medium">Sessions</CardTitle>
-        </CardHeader>
         <CardContent className="p-0">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="pl-6">Name</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead className="text-right">Messages</TableHead>
-                <TableHead className="text-right">Links</TableHead>
-                <TableHead className="text-right pr-6">Last active</TableHead>
+                <TableHead className="pl-6">
+                  <ColumnHeader
+                    label="Name"
+                    sortDirection={sort.key === "name" ? sort.direction : undefined}
+                    filterActive={!!q}
+                  >
+                    <ColumnSection label="Sort" />
+                    <ColumnOption
+                      href={href({ sort: sortValue("name", "asc") })}
+                      active={sort.key === "name" && sort.direction === "asc"}
+                      icon={<ArrowDown className="size-3.5" />}
+                    >
+                      A → Z
+                    </ColumnOption>
+                    <ColumnOption
+                      href={href({ sort: sortValue("name", "desc") })}
+                      active={sort.key === "name" && sort.direction === "desc"}
+                      icon={<ArrowUp className="size-3.5" />}
+                    >
+                      Z → A
+                    </ColumnOption>
+                    <ColumnDivider />
+                    <ColumnSection label="Filter" />
+                    <ColumnSearchInput
+                      path="/contacts"
+                      name="q"
+                      initial={q}
+                      currentParams={Object.fromEntries(
+                        Object.entries({ type, sort: sp.sort, view })
+                          .filter(([, v]) => v) as [string, string][],
+                      )}
+                      clearHref={href({ q: null })}
+                    />
+                  </ColumnHeader>
+                </TableHead>
+                <TableHead>
+                  <ColumnHeader
+                    label="Type"
+                    filterActive={typeActive}
+                  >
+                    <ColumnSection label="Show type" />
+                    {TYPE_OPTIONS.map((t) => {
+                      const Icon = t.Icon;
+                      return (
+                        <ColumnOption
+                          key={t.key}
+                          href={href({ type: t.key === "all" ? null : t.key })}
+                          active={
+                            (t.key === "all" && type === "all") || type === t.key
+                          }
+                          icon={<Icon className="size-3.5" />}
+                        >
+                          {t.label}
+                        </ColumnOption>
+                      );
+                    })}
+                    <ColumnDivider />
+                    <ColumnSection label="Archived" />
+                    {VIEW_OPTIONS.map((v) => (
+                      <ColumnOption
+                        key={v.key}
+                        href={href({ view: v.key === "active" ? null : v.key })}
+                        active={view === v.key}
+                      >
+                        {v.label}
+                      </ColumnOption>
+                    ))}
+                  </ColumnHeader>
+                </TableHead>
+                <TableHead className="text-right">
+                  <div className="flex justify-end">
+                    <ColumnHeader
+                      label="Messages"
+                      align="right"
+                      sortDirection={
+                        sort.key === "messages" ? sort.direction : undefined
+                      }
+                    >
+                      <ColumnSection label="Sort" />
+                      <ColumnOption
+                        href={href({ sort: sortValue("messages", "desc") })}
+                        active={
+                          sort.key === "messages" && sort.direction === "desc"
+                        }
+                        icon={<ArrowUp className="size-3.5" />}
+                      >
+                        High → Low
+                      </ColumnOption>
+                      <ColumnOption
+                        href={href({ sort: sortValue("messages", "asc") })}
+                        active={
+                          sort.key === "messages" && sort.direction === "asc"
+                        }
+                        icon={<ArrowDown className="size-3.5" />}
+                      >
+                        Low → High
+                      </ColumnOption>
+                    </ColumnHeader>
+                  </div>
+                </TableHead>
+                <TableHead className="text-right">
+                  <div className="flex justify-end">
+                    <ColumnHeader
+                      label="Links"
+                      align="right"
+                      sortDirection={
+                        sort.key === "urls" ? sort.direction : undefined
+                      }
+                    >
+                      <ColumnSection label="Sort" />
+                      <ColumnOption
+                        href={href({ sort: sortValue("urls", "desc") })}
+                        active={sort.key === "urls" && sort.direction === "desc"}
+                        icon={<ArrowUp className="size-3.5" />}
+                      >
+                        High → Low
+                      </ColumnOption>
+                      <ColumnOption
+                        href={href({ sort: sortValue("urls", "asc") })}
+                        active={sort.key === "urls" && sort.direction === "asc"}
+                        icon={<ArrowDown className="size-3.5" />}
+                      >
+                        Low → High
+                      </ColumnOption>
+                    </ColumnHeader>
+                  </div>
+                </TableHead>
+                <TableHead className="text-right pr-6">
+                  <div className="flex justify-end">
+                    <ColumnHeader
+                      label="Last active"
+                      align="right"
+                      sortDirection={
+                        sort.key === "recent" ? sort.direction : undefined
+                      }
+                    >
+                      <ColumnSection label="Sort" />
+                      <ColumnOption
+                        href={href({ sort: sortValue("recent", "desc") })}
+                        active={
+                          sort.key === "recent" && sort.direction === "desc"
+                        }
+                        icon={<ArrowUp className="size-3.5" />}
+                      >
+                        Newest first
+                      </ColumnOption>
+                      <ColumnOption
+                        href={href({ sort: sortValue("recent", "asc") })}
+                        active={
+                          sort.key === "recent" && sort.direction === "asc"
+                        }
+                        icon={<ArrowDown className="size-3.5" />}
+                      >
+                        Oldest first
+                      </ColumnOption>
+                    </ColumnHeader>
+                  </div>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -166,7 +352,7 @@ export default async function ContactsPage({
                     <TypeBadge type={row.chat_type} />
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground">
-                    {row.message_count.toLocaleString()}
+                    <CountCell n={row.message_count} capNote={row.last_history_error} />
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground">
                     {row.url_count.toLocaleString()}
@@ -209,10 +395,45 @@ function TypeBadge({ type }: { type: string }) {
   );
 }
 
-function qs(parts: Record<string, string>) {
-  const usp = new URLSearchParams();
-  for (const [k, v] of Object.entries(parts)) {
-    if (v) usp.set(k, v);
-  }
-  return usp.toString();
+/**
+ * Per-row message count cell. When the indexer's per-chat history fetch hit
+ * its cap on the LAST run it stores a `hit X-msg cap, rerun deep index…`
+ * marker on the session row; we surface that with an amber icon + tooltip
+ * so the user knows the number is a lower bound and another deep-index
+ * pass will extend it. A heuristic 10k-equality fallback catches sessions
+ * whose history was capped under the old 10k single-run limit and never
+ * re-indexed under the new logic.
+ */
+function CountCell({ n, capNote }: { n: number; capNote: string | null }) {
+  const stillCapped = capNote ? capNote.startsWith("hit ") : false;
+  const legacyCapped = n === 10_000 && !capNote;
+  const looksCapped = stillCapped || legacyCapped;
+  const tooltip = stillCapped
+    ? `${n.toLocaleString()} indexed · ${capNote}. Run Deep index from Settings to continue backfilling.`
+    : legacyCapped
+      ? `${n.toLocaleString()} indexed — likely capped under the old 10,000-msg limit. Run Deep index from Settings to backfill older history.`
+      : undefined;
+  return (
+    <span
+      className={
+        looksCapped ? "inline-flex items-center gap-1 cursor-help" : undefined
+      }
+      title={tooltip}
+    >
+      {n.toLocaleString()}
+      {looksCapped && <AlertCircle className="size-3 text-amber-500" />}
+    </span>
+  );
+}
+
+function Chip({ label, href }: { label: string; href: string }) {
+  return (
+    <Link
+      href={href}
+      className="inline-flex items-center gap-1 rounded-md bg-muted hover:bg-accent px-2 py-1 text-foreground transition-colors"
+    >
+      <span>{label}</span>
+      <X className="size-3 text-muted-foreground" />
+    </Link>
+  );
 }

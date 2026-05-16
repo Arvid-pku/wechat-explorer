@@ -1,11 +1,12 @@
 import Link from "next/link";
+import { getDb } from "@/lib/db";
 import { getLinksInGroup, getLinkGroupFacets } from "@/lib/queries";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, ExternalLink, Download } from "lucide-react";
+import { ArrowLeft, ExternalLink, Download, UserCircle2, X } from "lucide-react";
 import { format } from "date-fns";
-import { ArchivedToggle, buildArchivedToggleHref } from "@/components/archived-toggle";
+import { ArchivedFilterPill, buildArchivedFilterHref } from "@/components/archived-filter-pill";
 
 export const dynamic = "force-dynamic";
 
@@ -24,15 +25,37 @@ export default async function LinksGroupPage({
   const page = Math.max(0, parseInt(sp.page ?? "0", 10));
   const includeArchived = sp.archived === "1";
 
+  // `chat` carries a session username (canonical) or — for older URLs —
+  // a display name. Resolve to username when possible so the pill can show
+  // the friendly display name and queries can use the unique id.
+  let scopeUsername: string | undefined;
+  let scopeDisplay: string | undefined;
+  let chatDisplayFallback: string | undefined;
+  if (sp.chat) {
+    const row = getDb()
+      .prepare(`SELECT username, display_name FROM sessions WHERE username = ?`)
+      .get(sp.chat) as { username: string; display_name: string } | undefined;
+    if (row) {
+      scopeUsername = row.username;
+      scopeDisplay = row.display_name;
+    } else {
+      chatDisplayFallback = sp.chat;
+    }
+  }
+
   const items = getLinksInGroup(decoded, {
     sender: sp.sender,
-    chat: sp.chat,
+    chat: chatDisplayFallback,
+    chatUsername: scopeUsername,
     q: sp.q,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
     includeArchived,
   });
-  const facets = getLinkGroupFacets(decoded, { includeArchived });
+  const facets = getLinkGroupFacets(decoded, {
+    includeArchived,
+    chatUsername: scopeUsername,
+  });
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-6">
@@ -53,9 +76,9 @@ export default async function LinksGroupPage({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <ArchivedToggle
+          <ArchivedFilterPill
             on={includeArchived}
-            href={buildArchivedToggleHref(`/links/${group}`, sp, includeArchived)}
+            href={buildArchivedFilterHref(`/links/${group}`, sp, includeArchived)}
           />
           <a
             href={`/api/export/links?group=${encodeURIComponent(decoded)}&format=csv`}
@@ -72,12 +95,32 @@ export default async function LinksGroupPage({
         </div>
       </header>
 
-      {(sp.sender || sp.chat || sp.q) && (
+      {scopeUsername && scopeDisplay && (
+        <div className="flex items-center gap-2 flex-wrap rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+          <UserCircle2 className="size-3.5 text-primary" />
+          <span className="text-muted-foreground">Filtered to chat:</span>
+          <Link
+            href={`/contacts/${encodeURIComponent(scopeUsername)}`}
+            className="font-medium text-foreground hover:underline truncate max-w-[40ch]"
+          >
+            {scopeDisplay}
+          </Link>
+          <Link
+            href={`/links/${group}?${stripParam(sp, "chat")}`}
+            className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            title="Clear chat filter"
+          >
+            <X className="size-3" /> clear
+          </Link>
+        </div>
+      )}
+
+      {(sp.sender || (sp.chat && !scopeUsername) || sp.q) && (
         <div className="flex items-center gap-2 flex-wrap">
           {sp.sender && (
             <FilterChip label={`Sender: ${sp.sender}`} href={`/links/${group}?${stripParam(sp, "sender")}`} />
           )}
-          {sp.chat && (
+          {sp.chat && !scopeUsername && (
             <FilterChip label={`Chat: ${sp.chat}`} href={`/links/${group}?${stripParam(sp, "chat")}`} />
           )}
           {sp.q && <FilterChip label={`Search: ${sp.q}`} href={`/links/${group}?${stripParam(sp, "q")}`} />}

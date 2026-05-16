@@ -6,7 +6,12 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
-export function ArchiveToggle({ username, archived }: { username: string; archived: boolean }) {
+/**
+ * Action button on a contact-detail page that archives or restores the session.
+ * Different from `ArchivedFilterPill`, which only toggles the include-archived
+ * URL parameter on list pages.
+ */
+export function ArchiveSessionButton({ username, archived }: { username: string; archived: boolean }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
 

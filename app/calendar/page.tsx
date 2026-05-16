@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { format, formatDistanceToNow } from "date-fns";
+import { getDb } from "@/lib/db";
 import { getHeatmap } from "@/lib/queries";
 import {
   getCoveredYears,
@@ -22,7 +23,11 @@ import { Separator } from "@/components/ui/separator";
 import { HeatmapClient } from "./client";
 import { HourlyHeatmap } from "@/components/charts/hourly-heatmap";
 import { KeywordCloud } from "@/components/charts/keyword-cloud";
-import { ArchivedToggle, buildArchivedToggleHref } from "@/components/archived-toggle";
+import {
+  ArchivedFilterPill,
+  buildArchivedFilterHref,
+} from "@/components/archived-filter-pill";
+import { X, UserCircle2 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -38,13 +43,54 @@ function isValidDay(s: string | undefined, year: number): s is string {
   return !Number.isNaN(d.getTime());
 }
 
+/**
+ * Build a calendar URL preserving the current params but overriding selected
+ * ones. Passing `null` for a key strips that param. Keeps `chat=` / `archived=`
+ * sticky as the user clicks across years / days inside a scoped view.
+ */
+function calendarHref(
+  sp: Record<string, string | undefined>,
+  overrides: Record<string, string | null>,
+): string {
+  const next = new URLSearchParams();
+  for (const [k, v] of Object.entries(sp)) {
+    if (v && !(k in overrides)) next.set(k, v);
+  }
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== null) next.set(k, v);
+  }
+  const qs = next.toString();
+  return qs ? `/calendar?${qs}` : "/calendar";
+}
+
 export default async function CalendarPage({
   searchParams,
 }: {
-  searchParams: Promise<{ year?: string; day?: string; archived?: string }>;
+  searchParams: Promise<{
+    year?: string;
+    day?: string;
+    archived?: string;
+    chat?: string;
+  }>;
 }) {
   const sp = await searchParams;
-  const covered = getCoveredYears();
+  const includeArchived = sp.archived === "1";
+
+  // Resolve the chat scope first — if the username doesn't match any session
+  // (mangled URL, deleted contact), silently fall back to the global view.
+  let scopeUsername: string | null = null;
+  let scopeDisplay: string | null = null;
+  if (sp.chat) {
+    const row = getDb()
+      .prepare(`SELECT username, display_name FROM sessions WHERE username = ?`)
+      .get(sp.chat) as { username: string; display_name: string } | undefined;
+    if (row) {
+      scopeUsername = row.username;
+      scopeDisplay = row.display_name;
+    }
+  }
+
+  const covered = getCoveredYears({ chatUsername: scopeUsername });
   const defaultYear = covered[0] ?? new Date().getFullYear();
   const parsedYear = sp.year ? parseInt(sp.year, 10) : NaN;
   const year =
@@ -52,10 +98,12 @@ export default async function CalendarPage({
       ? parsedYear
       : defaultYear;
   const day = isValidDay(sp.day, year) ? sp.day : undefined;
-  const includeArchived = sp.archived === "1";
 
-  const data = getHeatmap(year, { includeArchived });
-  const summary = getYearSummary(year, { includeArchived });
+  const data = getHeatmap(year, { includeArchived, chatUsername: scopeUsername });
+  const summary = getYearSummary(year, {
+    includeArchived,
+    chatUsername: scopeUsername,
+  });
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-6">
@@ -68,7 +116,7 @@ export default async function CalendarPage({
               <>
                 {" · busiest day "}
                 <Link
-                  href={`/calendar?year=${year}&day=${summary.busiestDay.day}`}
+                  href={calendarHref(sp, { year: String(year), day: summary.busiestDay.day })}
                   className="underline-offset-2 hover:underline"
                 >
                   {summary.busiestDay.day}
@@ -83,14 +131,13 @@ export default async function CalendarPage({
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center gap-1">
             {covered.map((y) => {
-              const params = new URLSearchParams();
-              params.set("year", String(y));
-              if (day && day.startsWith(String(y))) params.set("day", day);
-              if (includeArchived) params.set("archived", "1");
+              const overrides: Record<string, string | null> = { year: String(y) };
+              // Only carry `day` across when the destination year still owns it.
+              if (!(day && day.startsWith(String(y)))) overrides.day = null;
               return (
                 <Link
                   key={y}
-                  href={`/calendar?${params.toString()}`}
+                  href={calendarHref(sp, overrides)}
                   className={`rounded-md border border-border/60 px-3 py-1 text-sm hover:bg-accent ${
                     y === year ? "bg-accent" : ""
                   }`}
@@ -100,12 +147,18 @@ export default async function CalendarPage({
               );
             })}
           </div>
-          <ArchivedToggle
+          <ArchivedFilterPill
             on={includeArchived}
-            href={buildArchivedToggleHref("/calendar", sp, includeArchived)}
+            href={buildArchivedFilterHref("/calendar", sp, includeArchived)}
           />
           <Link
-            href={`/recap/${year}${includeArchived ? "?archived=1" : ""}`}
+            href={
+              scopeUsername
+                ? `/recap/${year}/${encodeURIComponent(scopeUsername)}${
+                    includeArchived ? "?archived=1" : ""
+                  }`
+                : `/recap/${year}${includeArchived ? "?archived=1" : ""}`
+            }
             className="rounded-md border border-border/60 px-3 py-1 text-sm hover:bg-accent"
           >
             View {year} Recap →
@@ -113,9 +166,36 @@ export default async function CalendarPage({
         </div>
       </header>
 
+      {scopeUsername && (
+        <div className="flex items-center gap-2 flex-wrap rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+          <UserCircle2 className="size-3.5 text-primary" />
+          <span className="text-muted-foreground">Filtered to chat:</span>
+          <Link
+            href={`/contacts/${encodeURIComponent(scopeUsername)}`}
+            className="font-medium text-foreground hover:underline truncate max-w-[40ch]"
+          >
+            {scopeDisplay ?? scopeUsername}
+          </Link>
+          <Link
+            href={calendarHref(sp, { chat: null })}
+            className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            title="Clear chat filter"
+          >
+            <X className="size-3" /> clear
+          </Link>
+        </div>
+      )}
+
       <Card>
         <CardHeader>
-          <CardTitle>Activity heatmap — {year}</CardTitle>
+          <CardTitle>
+            Activity heatmap — {year}
+            {scopeUsername && scopeDisplay && (
+              <span className="text-muted-foreground font-normal">
+                {" "}· {scopeDisplay}
+              </span>
+            )}
+          </CardTitle>
           <CardDescription>Click any day to deep-dive</CardDescription>
         </CardHeader>
         <CardContent>
@@ -124,9 +204,22 @@ export default async function CalendarPage({
       </Card>
 
       {day ? (
-        <DayDetail day={day} year={year} includeArchived={includeArchived} />
+        <DayDetail
+          day={day}
+          year={year}
+          includeArchived={includeArchived}
+          scopeUsername={scopeUsername}
+          scopeDisplay={scopeDisplay}
+          sp={sp}
+        />
       ) : (
-        <YearOverview year={year} summary={summary} includeArchived={includeArchived} />
+        <YearOverview
+          year={year}
+          summary={summary}
+          includeArchived={includeArchived}
+          scopeUsername={scopeUsername}
+          sp={sp}
+        />
       )}
     </div>
   );
@@ -136,20 +229,28 @@ function YearOverview({
   year,
   summary,
   includeArchived,
+  scopeUsername,
+  sp,
 }: {
   year: number;
   summary: ReturnType<typeof getYearSummary>;
   includeArchived: boolean;
+  scopeUsername: string | null;
+  sp: Record<string, string | undefined>;
 }) {
-  const yearKeywords = getYearKeywords(year, { includeArchived });
+  const yearKeywords = getYearKeywords(year, {
+    includeArchived,
+    chatUsername: scopeUsername,
+  });
   return (
     <div className="grid gap-6 md:grid-cols-3">
       <Card className="md:col-span-2">
         <CardHeader>
           <CardTitle>What was {year} about</CardTitle>
           <CardDescription>
-            Top-30 distinctive terms in {year} vs your all-time chat baseline
-            (sampled).
+            {scopeUsername
+              ? `Top-30 distinctive terms in this chat in ${year} vs your all-time chat baseline.`
+              : `Top-30 distinctive terms in ${year} vs your all-time chat baseline (sampled).`}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -162,14 +263,18 @@ function YearOverview({
       <Card>
         <CardHeader>
           <CardTitle>Year at a glance</CardTitle>
-          <CardDescription>{year} totals after exclusions</CardDescription>
+          <CardDescription>
+            {scopeUsername ? `${year} for this chat` : `${year} totals after exclusions`}
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
           <SummaryRow label="Total messages" value={summary.total.toLocaleString()} />
-          <SummaryRow
-            label="Unique chats"
-            value={summary.uniqueChats.toLocaleString()}
-          />
+          {!scopeUsername && (
+            <SummaryRow
+              label="Unique chats"
+              value={summary.uniqueChats.toLocaleString()}
+            />
+          )}
           <SummaryRow
             label="Your share"
             value={
@@ -183,7 +288,10 @@ function YearOverview({
             value={
               summary.busiestDay ? (
                 <Link
-                  href={`/calendar?year=${year}&day=${summary.busiestDay.day}`}
+                  href={calendarHref(sp, {
+                    year: String(year),
+                    day: summary.busiestDay.day,
+                  })}
                   className="hover:underline"
                 >
                   {summary.busiestDay.day} ({summary.busiestDay.n.toLocaleString()})
@@ -208,12 +316,38 @@ function SummaryRow({ label, value }: { label: string; value: React.ReactNode })
   );
 }
 
-function DayDetail({ day, year, includeArchived }: { day: string; year: number; includeArchived: boolean }) {
-  const groups = getDayMessagesGrouped(day, { includeArchived });
-  const hourly = getDayHourly(day, { includeArchived });
-  const keywords = getDayKeywords(day, year, { includeArchived });
+function DayDetail({
+  day,
+  year,
+  includeArchived,
+  scopeUsername,
+  scopeDisplay,
+  sp,
+}: {
+  day: string;
+  year: number;
+  includeArchived: boolean;
+  scopeUsername: string | null;
+  scopeDisplay: string | null;
+  sp: Record<string, string | undefined>;
+}) {
+  const groups = getDayMessagesGrouped(day, {
+    includeArchived,
+    chatUsername: scopeUsername,
+  });
+  const hourly = getDayHourly(day, {
+    includeArchived,
+    chatUsername: scopeUsername,
+  });
+  const keywords = getDayKeywords(day, year, {
+    includeArchived,
+    chatUsername: scopeUsername,
+  });
   const monthDay = day.slice(5);
-  const onThisDay = getOnThisDay(monthDay, year, 6, { includeArchived });
+  const onThisDay = getOnThisDay(monthDay, year, 6, {
+    includeArchived,
+    chatUsername: scopeUsername,
+  });
   const total = hourly.reduce((a, b) => a + b.n, 0);
 
   const headerDate = (() => {
@@ -231,17 +365,22 @@ function DayDetail({ day, year, includeArchived }: { day: string; year: number; 
               {total.toLocaleString()} messages
             </Badge>
             <Badge variant="outline" className="font-normal">
-              {groups.length.toLocaleString()} chats
+              {groups.length.toLocaleString()} chat{groups.length === 1 ? "" : "s"}
             </Badge>
+            {scopeUsername && scopeDisplay && (
+              <Badge variant="secondary" className="font-normal">
+                {scopeDisplay}
+              </Badge>
+            )}
           </CardTitle>
-          <CardDescription>
-            Hour-by-hour activity for {day}
-          </CardDescription>
+          <CardDescription>Hour-by-hour activity for {day}</CardDescription>
         </CardHeader>
         <CardContent>
           {total === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No indexed messages on this day — try a deep index from Settings.
+              {scopeUsername
+                ? "No messages with this chat on this day."
+                : "No indexed messages on this day — try a deep index from Settings."}
             </p>
           ) : (
             <HourlyHeatmap data={hourly} />
@@ -254,7 +393,9 @@ function DayDetail({ day, year, includeArchived }: { day: string; year: number; 
           <CardTitle>What was on the table</CardTitle>
           <CardDescription>
             Top-30 distinctive terms vs the trailing 365-day sampled baseline
-            {keywords.subsetSize > 0 ? ` · from ${keywords.subsetSize.toLocaleString()} text messages` : ""}
+            {keywords.subsetSize > 0
+              ? ` · from ${keywords.subsetSize.toLocaleString()} text messages`
+              : ""}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -271,6 +412,7 @@ function DayDetail({ day, year, includeArchived }: { day: string; year: number; 
             <CardTitle>On this day in previous years</CardTitle>
             <CardDescription>
               Same {monthDay} across earlier years that have data
+              {scopeUsername ? " with this chat" : ""}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -278,7 +420,7 @@ function DayDetail({ day, year, includeArchived }: { day: string; year: number; 
               {onThisDay.map((y) => (
                 <Link
                   key={y.year}
-                  href={`/calendar?year=${y.year}&day=${y.day}`}
+                  href={calendarHref(sp, { year: String(y.year), day: y.day })}
                   className="flex items-start gap-3 rounded-md border border-border/60 p-3 hover:bg-accent transition-colors"
                 >
                   <Badge className="shrink-0 font-mono">{y.year}</Badge>
@@ -298,7 +440,9 @@ function DayDetail({ day, year, includeArchived }: { day: string; year: number; 
                             className="truncate"
                             title={`${s.chat_display} · ${s.sender || "—"}`}
                           >
-                            <span className="text-foreground/80">{s.chat_display}:</span>{" "}
+                            <span className="text-foreground/80">
+                              {s.chat_display}:
+                            </span>{" "}
                             {s.content.slice(0, 80)}
                             {s.content.length > 80 ? "…" : ""}
                           </li>
@@ -315,23 +459,25 @@ function DayDetail({ day, year, includeArchived }: { day: string; year: number; 
 
       <Card>
         <CardHeader>
-          <CardTitle>Chats this day</CardTitle>
+          <CardTitle>{scopeUsername ? "Messages" : "Chats this day"}</CardTitle>
           <CardDescription>
-            One row per session, sorted by message count
+            {scopeUsername
+              ? "Latest messages from this chat on this day"
+              : "One row per session, sorted by message count"}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {groups.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              Nothing indexed for {day}. If you expect messages here, try a
-              deep reindex from Settings.
+              Nothing indexed for {day}. If you expect messages here, try a deep
+              reindex from Settings.
             </p>
           ) : (
             groups.map((g, i) => (
               <ChatGroupCard
                 key={`${g.chat_username ?? "null"}::${g.chat_display}`}
                 group={g}
-                openByDefault={i === 0}
+                openByDefault={i === 0 || groups.length === 1}
               />
             ))
           )}
@@ -399,9 +545,13 @@ function ChatGroupCard({
                 <Separator orientation="vertical" className="h-3" />
                 <span>{m.msg_type || "—"}</span>
                 <Separator orientation="vertical" className="h-3" />
-                <span className="tabular-nums">
+                <Link
+                  href={`/messages/${m.id}`}
+                  className="tabular-nums hover:text-foreground hover:underline"
+                  title="Open message permalink"
+                >
                   {format(new Date(m.timestamp * 1000), "HH:mm:ss")}
-                </span>
+                </Link>
               </div>
               <p className="break-words whitespace-pre-wrap">{m.content}</p>
             </div>

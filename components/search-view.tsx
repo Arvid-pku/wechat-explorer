@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
-import { Archive } from "lucide-react";
+import { Archive, UserCircle2, X } from "lucide-react";
 import Link from "next/link";
 
 interface Result {
@@ -22,23 +22,41 @@ interface Result {
   snippet: string;
 }
 
-export function SearchView() {
+export function SearchView({
+  scopeUsername,
+  scopeDisplay,
+}: {
+  scopeUsername?: string | null;
+  scopeDisplay?: string | null;
+} = {}) {
   const router = useRouter();
   const sp = useSearchParams();
-  const initial = sp.get("q") ?? "";
+  const qParam = sp.get("q") ?? "";
+  const chatParam = sp.get("chat") ?? "";
   const includeArchived = sp.get("archived") === "1";
-  const [value, setValue] = useState(initial);
-
-  useEffect(() => setValue(sp.get("q") ?? ""), [sp]);
+  const [value, setValue] = useState(qParam);
 
   const debounced = useDebounced(value, 250);
 
+  // Only sync the input from the URL when it changed externally — e.g. user
+  // clicked a search-result sender link or pasted a /search?q=… URL. Comparing
+  // against `debounced` (our own last write) avoids the race where each
+  // keystroke causes useSearchParams to hand back a new object reference and
+  // overwrites the in-flight value with the stale URL param. That race made
+  // the input feel "stuck" — characters typed during the debounce window were
+  // immediately reverted.
+  useEffect(() => {
+    if (qParam !== debounced) setValue(qParam);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qParam]);
+
   const { data, isFetching, error } = useQuery({
-    queryKey: ["search", debounced, includeArchived],
+    queryKey: ["search", debounced, includeArchived, chatParam],
     queryFn: async () => {
       if (!debounced.trim()) return { results: [] as Result[] };
       const params = new URLSearchParams({ q: debounced, limit: "80" });
       if (includeArchived) params.set("archived", "1");
+      if (chatParam) params.set("chat", chatParam);
       const res = await fetch(`/api/search?${params.toString()}`);
       return res.json() as Promise<{ results: Result[] }>;
     },
@@ -59,6 +77,14 @@ export function SearchView() {
     if (includeArchived) next.delete("archived");
     else next.set("archived", "1");
     router.replace(`/search${next.toString() ? `?${next.toString()}` : ""}`, { scroll: false });
+  }
+
+  function clearChatScope() {
+    const next = new URLSearchParams(sp.toString());
+    next.delete("chat");
+    router.replace(`/search${next.toString() ? `?${next.toString()}` : ""}`, {
+      scroll: false,
+    });
   }
 
   return (
@@ -92,6 +118,25 @@ export function SearchView() {
           {includeArchived ? "Archived shown" : "Include archived"}
         </button>
       </div>
+      {scopeUsername && (
+        <div className="flex items-center gap-2 flex-wrap rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+          <UserCircle2 className="size-3.5 text-primary" />
+          <span className="text-muted-foreground">Filtered to chat:</span>
+          <Link
+            href={`/contacts/${encodeURIComponent(scopeUsername)}`}
+            className="font-medium text-foreground hover:underline truncate max-w-[40ch]"
+          >
+            {scopeDisplay ?? scopeUsername}
+          </Link>
+          <button
+            onClick={clearChatScope}
+            className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            title="Clear chat filter"
+          >
+            <X className="size-3" /> clear
+          </button>
+        </div>
+      )}
       <p className="text-xs text-muted-foreground">
         Powered by SQLite FTS5 with trigram tokenizer — short CJK queries fall back to LIKE.
       </p>
@@ -139,9 +184,17 @@ export function SearchView() {
                     <span>·</span>
                     {r.sender ? (
                       <Link
-                        href={`/search?q=${encodeURIComponent(r.sender)}`}
+                        href={
+                          chatParam
+                            ? `/search?q=${encodeURIComponent(r.sender)}&chat=${encodeURIComponent(chatParam)}`
+                            : `/search?q=${encodeURIComponent(r.sender)}`
+                        }
                         className="hover:text-foreground hover:underline"
-                        title={`Search for ${r.sender}`}
+                        title={
+                          chatParam
+                            ? `Search for ${r.sender} within this chat`
+                            : `Search for ${r.sender}`
+                        }
                       >
                         {r.sender}
                       </Link>
@@ -152,17 +205,35 @@ export function SearchView() {
                       {r.msg_type}
                     </Badge>
                     <span>·</span>
-                    <Link
-                      href={(() => {
-                        const d = new Date(r.timestamp * 1000);
-                        const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-                        return `/calendar?year=${d.getFullYear()}&day=${day}`;
-                      })()}
-                      className="tabular-nums hover:text-foreground hover:underline"
-                      title="Open this day in the calendar"
-                    >
-                      {format(new Date(r.timestamp * 1000), "MMM d, yyyy HH:mm")}
-                    </Link>
+                    {(() => {
+                      const d = new Date(r.timestamp * 1000);
+                      const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                      // Carry chat scope to calendar too — user clicked into
+                      // this chat's results, they probably want the calendar
+                      // scoped the same way.
+                      const calChat = chatParam || r.chat_username;
+                      const calHref = calChat
+                        ? `/calendar?year=${d.getFullYear()}&day=${day}&chat=${encodeURIComponent(calChat)}`
+                        : `/calendar?year=${d.getFullYear()}&day=${day}`;
+                      return (
+                        <>
+                          <Link
+                            href={`/messages/${r.id}`}
+                            className="tabular-nums hover:text-foreground hover:underline"
+                            title={`Permalink · also opens day ${day} via the calendar link`}
+                          >
+                            {format(d, "MMM d, yyyy HH:mm")}
+                          </Link>
+                          <Link
+                            href={calHref}
+                            className="text-muted-foreground/70 hover:text-foreground hover:underline text-[10px]"
+                            title="Open this day in the calendar"
+                          >
+                            day
+                          </Link>
+                        </>
+                      );
+                    })()}
                   </div>
                   <p
                     className="text-sm mt-1 break-words [&_mark]:bg-amber-200/60 [&_mark]:rounded [&_mark]:px-0.5 [&_mark]:text-foreground dark:[&_mark]:bg-amber-500/30"

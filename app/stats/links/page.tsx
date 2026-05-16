@@ -3,7 +3,7 @@ import { ArrowLeft, LinkIcon, TrendingUp, Globe, Users } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getLinksStats } from "@/lib/stats";
 import { Donut, LineWithBars, DomainTreemap } from "@/components/charts/stats/charts";
-import { ArchivedToggle, buildArchivedToggleHref } from "@/components/archived-toggle";
+import { ArchivedFilterPill, buildArchivedFilterHref } from "@/components/archived-filter-pill";
 
 export const dynamic = "force-dynamic";
 
@@ -51,9 +51,9 @@ export default async function LinksStatsPage({
               {includeArchived ? " Archived chats are included." : " Archived chats are excluded by default."}
             </p>
           </div>
-          <ArchivedToggle
+          <ArchivedFilterPill
             on={includeArchived}
-            href={buildArchivedToggleHref("/stats/links", sp, includeArchived)}
+            href={buildArchivedFilterHref("/stats/links", sp, includeArchived)}
           />
         </div>
       </header>

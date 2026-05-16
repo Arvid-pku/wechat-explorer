@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { archiveSessions, restoreSessions } from "@/lib/queries";
+import { bumpArchiveEpoch } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 
@@ -21,5 +22,9 @@ export async function POST(request: Request) {
     action === "archive"
       ? archiveSessions(usernames, reason ?? "manual")
       : restoreSessions(usernames);
+  // Bump the archive epoch so every cached aggregate that respected
+  // EXCLUDED_SUBQUERY (overview, me-stats, recap, year keywords…) is
+  // recomputed on its next read.
+  if (n > 0) bumpArchiveEpoch();
   return NextResponse.json({ changed: n });
 }

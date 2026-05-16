@@ -19,7 +19,7 @@ import {
   PieChart,
   Users,
 } from "lucide-react";
-import { ArchiveToggle } from "@/components/archive-toggle";
+import { ArchiveSessionButton } from "@/components/archive-session-button";
 import { MonthlyActivityChart } from "@/components/charts/monthly-activity-chart";
 import { HourlyGrid } from "@/components/charts/hourly-grid";
 import { LatencyHistogram } from "@/components/charts/latency-histogram";
@@ -68,6 +68,24 @@ export default async function ContactDetailPage({
         <ArrowLeft className="size-3.5 mr-1" /> Back to contacts
       </Link>
 
+      {a.meHandles.length === 0 && (
+        <div className="flex gap-3 items-start rounded-md border border-amber-500/30 bg-amber-50/60 dark:bg-amber-900/10 px-3 py-2.5 text-sm">
+          <Sparkles className="size-4 shrink-0 text-amber-600 mt-0.5" />
+          <div className="space-y-1">
+            <p className="font-medium text-amber-900 dark:text-amber-200">
+              Reply latency and your-share are unavailable for this chat
+            </p>
+            <p className="text-xs text-muted-foreground">
+              The indexer couldn&apos;t identify your sender handle here.{" "}
+              <Link href="/settings" className="underline hover:text-foreground">
+                Open Settings
+              </Link>{" "}
+              to set your me-handles and re-run a quick index.
+            </p>
+          </div>
+        </div>
+      )}
+
       <header className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
@@ -97,13 +115,13 @@ export default async function ContactDetailPage({
           )}
           {lastDay && lastYear && (
             <Link
-              href={`/calendar?year=${lastYear}&day=${lastDay}`}
+              href={`/calendar?year=${lastYear}&day=${lastDay}&chat=${encodeURIComponent(session.username)}`}
               className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-1.5 text-sm hover:bg-accent"
             >
               <CalendarDays className="size-3.5" /> View in calendar
             </Link>
           )}
-          <ArchiveToggle username={session.username} archived={session.archived === 1} />
+          <ArchiveSessionButton username={session.username} archived={session.archived === 1} />
         </div>
       </header>
 
@@ -250,7 +268,7 @@ export default async function ContactDetailPage({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <WordCloud words={a.topics} />
+            <WordCloud words={a.topics} chatUsername={session.username} />
           </CardContent>
         </Card>
 
@@ -260,7 +278,7 @@ export default async function ContactDetailPage({
             <CardDescription>Where do the links go?</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <DomainShareList rows={a.topDomains} chatDisplay={chatDisplay} />
+            <DomainShareList rows={a.topDomains} chatUsername={session.username} />
             {a.fileTypes.length > 0 && (
               <div>
                 <p className="text-xs font-medium text-muted-foreground mb-1.5">File types</p>
@@ -290,7 +308,7 @@ export default async function ContactDetailPage({
               <CardDescription>Tokens distinctive to your side</CardDescription>
             </CardHeader>
             <CardContent>
-              <VocabList words={a.vocab.aOnly} />
+              <VocabList words={a.vocab.aOnly} chatUsername={session.username} />
             </CardContent>
           </Card>
           <Card>
@@ -299,7 +317,7 @@ export default async function ContactDetailPage({
               <CardDescription>Tokens distinctive to their side</CardDescription>
             </CardHeader>
             <CardContent>
-              <VocabList words={a.vocab.bOnly} />
+              <VocabList words={a.vocab.bOnly} chatUsername={session.username} />
             </CardContent>
           </Card>
         </section>
@@ -314,7 +332,7 @@ export default async function ContactDetailPage({
             <CardDescription>The voices that drive this group</CardDescription>
           </CardHeader>
           <CardContent>
-            <TopSendersList senders={a.topSenders} />
+            <TopSendersList senders={a.topSenders} chatUsername={session.username} />
           </CardContent>
         </Card>
       )}
@@ -379,8 +397,9 @@ export default async function ContactDetailPage({
                       </span>
                     ) : (
                       <Link
-                        href={`/search?q=${encodeURIComponent(m.sender)}`}
+                        href={`/search?q=${encodeURIComponent(m.sender)}&chat=${encodeURIComponent(session.username)}`}
                         className="font-medium text-foreground hover:underline"
+                        title={`Search for ${m.sender} within this chat`}
                       >
                         {m.sender}
                       </Link>
@@ -389,9 +408,9 @@ export default async function ContactDetailPage({
                       {m.msg_type}
                     </Badge>
                     <Link
-                      href={`/calendar?year=${d.getFullYear()}&day=${dayStr}`}
+                      href={`/calendar?year=${d.getFullYear()}&day=${dayStr}&chat=${encodeURIComponent(session.username)}`}
                       className="tabular-nums hover:text-foreground hover:underline"
-                      title="Open this day in the calendar"
+                      title="Open this day in the calendar (filtered to this chat)"
                     >
                       {format(d, "MMM d, HH:mm")}
                     </Link>
@@ -543,10 +562,10 @@ function Metric({ label, value }: { label: React.ReactNode; value: string }) {
 
 function DomainShareList({
   rows,
-  chatDisplay,
+  chatUsername,
 }: {
   rows: { domain_group: string; n: number }[];
-  chatDisplay: string;
+  chatUsername: string;
 }) {
   if (rows.length === 0) {
     return <p className="text-sm text-muted-foreground">No links indexed yet.</p>;
@@ -557,7 +576,7 @@ function DomainShareList({
       {rows.map((r) => (
         <Link
           key={r.domain_group}
-          href={`/links/${encodeURIComponent(r.domain_group)}?chat=${encodeURIComponent(chatDisplay)}`}
+          href={`/links/${encodeURIComponent(r.domain_group)}?chat=${encodeURIComponent(chatUsername)}`}
           className="group block rounded px-1.5 py-1 hover:bg-accent/60 transition-colors"
         >
           <div className="flex items-center justify-between text-sm">
@@ -576,39 +595,57 @@ function DomainShareList({
   );
 }
 
-function VocabList({ words }: { words: import("@/lib/text").ScoredWord[] }) {
+function VocabList({
+  words,
+  chatUsername,
+}: {
+  words: import("@/lib/text").ScoredWord[];
+  chatUsername?: string;
+}) {
   if (words.length === 0) {
     return <p className="text-sm text-muted-foreground">Not enough distinctive vocabulary yet.</p>;
   }
   return (
     <div className="flex flex-wrap gap-1.5">
-      {words.map((w) => (
-        <Link
-          key={w.word}
-          href={`/search?q=${encodeURIComponent(w.word)}`}
-          className="inline-flex items-center gap-1 rounded-md bg-muted hover:bg-accent px-2 py-1 text-sm transition-colors"
-          title={`${w.count} mentions`}
-        >
-          <span className="font-medium">{w.word}</span>
-          <span className="text-[10px] text-muted-foreground tabular-nums">{w.count}</span>
-        </Link>
-      ))}
+      {words.map((w) => {
+        const href = chatUsername
+          ? `/search?q=${encodeURIComponent(w.word)}&chat=${encodeURIComponent(chatUsername)}`
+          : `/search?q=${encodeURIComponent(w.word)}`;
+        return (
+          <Link
+            key={w.word}
+            href={href}
+            className="inline-flex items-center gap-1 rounded-md bg-muted hover:bg-accent px-2 py-1 text-sm transition-colors"
+            title={`${w.count} mentions${chatUsername ? " (in this chat)" : ""}`}
+          >
+            <span className="font-medium">{w.word}</span>
+            <span className="text-[10px] text-muted-foreground tabular-nums">{w.count}</span>
+          </Link>
+        );
+      })}
     </div>
   );
 }
 
 function TopSendersList({
   senders,
+  chatUsername,
 }: {
   senders: { sender: string; n: number; knownUsername: string | null }[];
+  chatUsername?: string;
 }) {
   const max = senders.reduce((a, b) => Math.max(a, b.n), 0) || 1;
   return (
     <ul className="space-y-1.5">
       {senders.map((s) => {
+        // Known contact → jump to their own contact page (no scope makes
+        // sense there). Unknown sender → scoped search within this group
+        // so the user can read what they wrote here.
         const href = s.knownUsername
           ? `/contacts/${encodeURIComponent(s.knownUsername)}`
-          : `/search?q=${encodeURIComponent(s.sender)}`;
+          : chatUsername
+            ? `/search?q=${encodeURIComponent(s.sender)}&chat=${encodeURIComponent(chatUsername)}`
+            : `/search?q=${encodeURIComponent(s.sender)}`;
         return (
           <li key={s.sender}>
             <Link

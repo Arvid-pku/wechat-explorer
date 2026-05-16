@@ -44,3 +44,6 @@ next-env.d.ts
 task_plan.md
 findings.md
 progress.md
+
+# Playwright MCP transient artifacts (per-session snapshot YAMLs + console logs)
+.playwright-mcp/

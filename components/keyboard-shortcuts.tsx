@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 
 /**
  * Global keyboard shortcuts:
- *   /        — focus the page's main search box if there is one, else /search
+ *   /        — open the command palette (same as ⌘K)
  *   g h      — go to overview
+ *   g m      — go to /me (personal stats)
  *   g c      — contacts
  *   g l      — links
  *   g k      — calendar
@@ -15,7 +16,6 @@ import { useRouter } from "next/navigation";
  *   g g      — graph
  *   g y      — current year recap
  *   j / k    — move focus down/up among rows in the current table/list
- *   ?        — show shortcut hint via console (no UI for now)
  *
  * Shortcuts are disabled while typing in an input/textarea/contenteditable.
  */
@@ -79,6 +79,8 @@ export function KeyboardShortcuts({ onOpenCommand }: { onOpenCommand: () => void
           switch (e.key.toLowerCase()) {
             case "h":
               return "/";
+            case "m":
+              return "/me";
             case "c":
               return "/contacts";
             case "l":

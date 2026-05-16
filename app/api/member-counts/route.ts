@@ -24,7 +24,10 @@ export async function POST(request: Request) {
 
   for (const g of batch) {
     try {
-      const members = await getMembers(g.display_name);
+      // Pass the canonical username — wx accepts both, but display names
+      // collide constantly in WeChat (e.g. multiple "工作群"), and a fuzzy
+      // match could return some other group's members.
+      const members = await getMembers(g.username);
       setMemberCount(g.username, members.length);
       upsertGroupMembers(g.username, members);
       results.push({

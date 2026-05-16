@@ -3,7 +3,7 @@ import { getLinkGroups } from "@/lib/queries";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDistanceToNow } from "date-fns";
 import { LinkIcon } from "lucide-react";
-import { ArchivedToggle, buildArchivedToggleHref } from "@/components/archived-toggle";
+import { ArchivedFilterPill, buildArchivedFilterHref } from "@/components/archived-filter-pill";
 
 export const dynamic = "force-dynamic";
 
@@ -49,9 +49,9 @@ export default async function LinksIndex({
             {includeArchived ? " (including archived)" : ""}
           </p>
         </div>
-        <ArchivedToggle
+        <ArchivedFilterPill
           on={includeArchived}
-          href={buildArchivedToggleHref("/links", sp, includeArchived)}
+          href={buildArchivedFilterHref("/links", sp, includeArchived)}
         />
       </header>
 

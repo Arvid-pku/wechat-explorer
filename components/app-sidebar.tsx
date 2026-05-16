@@ -13,12 +13,14 @@ import {
   Settings,
   Command as CommandIcon,
   Sparkles,
+  UserCircle2,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { href: "/", label: "Overview", icon: BarChart3 },
+  { href: "/me", label: "You", icon: UserCircle2 },
   { href: "/contacts", label: "Contacts", icon: Users },
   { href: "/links", label: "Links", icon: LinkIcon },
   { href: "/search", label: "Search", icon: Search },
