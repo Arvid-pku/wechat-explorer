@@ -4,6 +4,7 @@ import { useCallback, useState, type ReactNode } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { CommandPalette } from "@/components/command-palette";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { LanguageToggle } from "@/components/language-toggle";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -14,6 +15,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <AppSidebar onOpenCommand={openPalette} />
       <main className="flex-1 min-w-0 flex flex-col">
         <header className="sticky top-0 z-10 flex h-14 items-center justify-end gap-2 border-b border-border/60 bg-background/80 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+          <LanguageToggle />
           <ThemeToggle />
         </header>
         <div className="flex-1 min-w-0">{children}</div>

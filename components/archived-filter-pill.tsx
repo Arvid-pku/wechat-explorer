@@ -1,21 +1,28 @@
 import Link from "next/link";
 import { Archive } from "lucide-react";
+import { t, type Locale } from "@/lib/i18n";
 
 /**
  * Pill that toggles the "include archived chats" URL parameter on list pages
  * (search / links / calendar / reading / recap / stats). Server-rendered;
  * navigates by setting `archived=1`. Different from `ArchiveSessionButton`,
  * which actually flips a single session's archived state via the API.
+ *
+ * Accepts an optional `locale` so server pages that have already resolved it
+ * can hand it in. Defaults to English when omitted (callers that haven't
+ * migrated yet keep their pre-i18n behaviour).
  */
 export function ArchivedFilterPill({
   on,
   href,
   className,
+  locale = "en",
 }: {
   on: boolean;
   /** URL when the toggle is clicked. */
   href: string;
   className?: string;
+  locale?: Locale;
 }) {
   return (
     <Link
@@ -27,10 +34,12 @@ export function ArchivedFilterPill({
             : "border-border/60 text-muted-foreground hover:text-foreground hover:bg-accent"
         }` + (className ? ` ${className}` : "")
       }
-      title={on ? "Showing archived" : "Click to include archived"}
+      title={on
+        ? (locale === "zh" ? "已显示归档会话" : "Showing archived")
+        : (locale === "zh" ? "点击以包含归档会话" : "Click to include archived")}
     >
       <Archive className="size-3.5" />
-      {on ? "Archived shown" : "Include archived"}
+      {on ? t("common.archivedShown", locale) : t("common.includeArchived", locale)}
     </Link>
   );
 }

@@ -5,6 +5,8 @@ import "./globals.css";
 import { Providers } from "@/components/providers";
 import { AppShell } from "@/components/app-shell";
 import { Toaster } from "@/components/ui/sonner";
+import { LocaleProvider } from "@/components/i18n-provider";
+import { getServerLocale } from "@/lib/i18n-server";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -35,14 +37,18 @@ const THEME_INIT_SCRIPT = `
 }catch(e){}})();
 `.trim();
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Pull locale from the `we-locale` cookie so the very first server render
+  // already uses the right dictionary — no flash of English on a Chinese
+  // user's reload. The `<html lang>` attribute follows.
+  const locale = await getServerLocale();
   return (
     <html
-      lang="en"
+      lang={locale === "zh" ? "zh-Hans" : "en"}
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
@@ -51,7 +57,9 @@ export default function RootLayout({
           {THEME_INIT_SCRIPT}
         </Script>
         <Providers>
-          <AppShell>{children}</AppShell>
+          <LocaleProvider initial={locale}>
+            <AppShell>{children}</AppShell>
+          </LocaleProvider>
           <Toaster />
         </Providers>
       </body>
