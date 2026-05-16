@@ -1,5 +1,7 @@
+import { Suspense } from "react";
 import { getDb, dbPath, getMeta } from "@/lib/db";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatDistanceToNow } from "date-fns";
 import { statSync } from "node:fs";
 import { ReindexButtons } from "./reindex-buttons";
@@ -7,18 +9,26 @@ import { HygienePanel } from "./hygiene-panel";
 import { listArchiveCandidates, listArchived, ensureMeDetected, detectMeHandles, ensureDistinctSendersBackfilled } from "@/lib/queries";
 import { getCacheStats } from "@/lib/cache";
 import { CachePanel } from "./cache-panel";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Languages } from "lucide-react";
+import { LanguagePanel } from "./language-panel";
+import { t, type TKey } from "@/lib/i18n";
+import { getServerLocale } from "@/lib/i18n-server";
 
 export const dynamic = "force-dynamic";
 
-const STALE_PRESETS = [0, 30, 90, 180, 365];
-const TYPE_PRESETS: { key: string; types: ("private" | "group" | "official")[] }[] = [
-  { key: "group", types: ["group"] },
-  { key: "private+group", types: ["private", "group"] },
-  { key: "all", types: ["private", "group", "official"] },
-];
+// HygienePanel's default selection is "stale ≥ 180 days, groups only,
+// not one-sided" — preload exactly that preset on the server, fetch other
+// preset combinations from /api/archive-candidates on demand when the user
+// picks a different filter. The old approach pre-loaded all 30 combinations
+// up front and made the page ~7.5s cold.
+const DEFAULT_STALE = 180;
+const DEFAULT_TYPES: ("private" | "group" | "official")[] = ["group"];
+const DEFAULT_TYPE_KEY = "group";
+const DEFAULT_ONE_SIDED = false;
 
 export default async function SettingsPage() {
+  const locale = await getServerLocale();
+  const tr = (k: TKey) => t(k, locale);
   const lastQuick = getMeta("last_quick_index_at");
   const lastDeep = getMeta("last_deep_index_at");
   const db = getDb();
@@ -52,31 +62,26 @@ export default async function SettingsPage() {
   const { handles: meHandles } = ensureMeDetected();
   ensureDistinctSendersBackfilled();
   const meRankings = detectMeHandles().rankings;
-
-  const candidatesByPreset: Record<string, ReturnType<typeof listArchiveCandidates>> = {};
-  for (const oneSided of [false, true]) {
-    for (const stale of STALE_PRESETS) {
-      for (const tp of TYPE_PRESETS) {
-        const key = `${oneSided ? "one" : "any"}:${tp.key}:${stale}`;
-        candidatesByPreset[key] = listArchiveCandidates({
-          staleDays: stale,
-          types: tp.types,
-          onlyOneSided: oneSided,
-        });
-      }
-    }
-  }
-  const archived = listArchived();
   const cacheStats = getCacheStats();
 
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-8 space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Index status, chat hygiene, and data location.
-        </p>
+        <h1 className="text-2xl font-semibold tracking-tight">{tr("settings.title")}</h1>
+        <p className="text-sm text-muted-foreground mt-1">{tr("settings.desc")}</p>
       </header>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Languages className="size-4" /> {tr("settings.language")}
+          </CardTitle>
+          <CardDescription>{tr("settings.languageDesc")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <LanguagePanel />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -134,12 +139,9 @@ export default async function SettingsPage() {
         </CardContent>
       </Card>
 
-      <HygienePanel
-        candidatesByPreset={candidatesByPreset}
-        archived={archived}
-        meHandles={meHandles}
-        meRankings={meRankings}
-      />
+      <Suspense fallback={<HygienePanelSkeleton />}>
+        <HygienePanelLoader meHandles={meHandles} meRankings={meRankings} />
+      </Suspense>
 
       <CachePanel stats={cacheStats} />
 
@@ -160,5 +162,57 @@ export default async function SettingsPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/**
+ * Async server component that loads only the default preset + the archived
+ * list. Runs inside a Suspense boundary on the Settings page so the header
+ * and other panels render immediately.
+ */
+async function HygienePanelLoader({
+  meHandles,
+  meRankings,
+}: {
+  meHandles: string[];
+  meRankings: ReturnType<typeof detectMeHandles>["rankings"];
+}) {
+  const defaultRows = listArchiveCandidates({
+    staleDays: DEFAULT_STALE,
+    types: DEFAULT_TYPES,
+    onlyOneSided: DEFAULT_ONE_SIDED,
+  });
+  const archived = listArchived();
+  const defaultKey = `${DEFAULT_ONE_SIDED ? "one" : "any"}:${DEFAULT_TYPE_KEY}:${DEFAULT_STALE}`;
+  const initialPreset = {
+    key: defaultKey,
+    stale: DEFAULT_STALE,
+    typeKey: DEFAULT_TYPE_KEY,
+    oneSided: DEFAULT_ONE_SIDED,
+    rows: defaultRows,
+  };
+  return (
+    <HygienePanel
+      initialPreset={initialPreset}
+      archived={archived}
+      meHandles={meHandles}
+      meRankings={meRankings}
+    />
+  );
+}
+
+function HygienePanelSkeleton() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Chat hygiene</CardTitle>
+        <CardDescription>Loading archive candidates…</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <Skeleton className="h-9 w-full" />
+        <Skeleton className="h-9 w-full" />
+        <Skeleton className="h-9 w-full" />
+      </CardContent>
+    </Card>
   );
 }

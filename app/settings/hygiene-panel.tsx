@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -69,33 +69,82 @@ const TYPE_PRESETS = [
   { key: "all", label: "+ Official" },
 ];
 
+export interface HygieneInitialPreset {
+  key: string;
+  stale: number;
+  typeKey: string;
+  oneSided: boolean;
+  rows: Row[];
+}
+
 export function HygienePanel({
-  candidatesByPreset,
+  initialPreset,
   archived,
   meHandles,
   meRankings,
 }: {
-  candidatesByPreset: Record<string, Row[]>;
+  initialPreset: HygieneInitialPreset;
   archived: Row[];
   meHandles: string[];
   meRankings: Ranking[];
 }) {
   const router = useRouter();
-  const [stale, setStale] = useState(180);
-  const [typeKey, setTypeKey] = useState("group");
-  const [oneSided, setOneSided] = useState(false);
+  const [stale, setStale] = useState(initialPreset.stale);
+  const [typeKey, setTypeKey] = useState(initialPreset.typeKey);
+  const [oneSided, setOneSided] = useState(initialPreset.oneSided);
   const [minSize, setMinSize] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [recomputing, setRecomputing] = useState(false);
   const [fetchingMembers, setFetchingMembers] = useState<{ done: number; total: number } | null>(null);
 
+  // Lazy preset cache — keyed the same way the old server-side cross product
+  // was. Seeded with the initial preset; other combos lazy-load from
+  // /api/archive-candidates as the user toggles the filters.
+  const [presetCache, setPresetCache] = useState<Record<string, Row[]>>(() => ({
+    [initialPreset.key]: initialPreset.rows,
+  }));
+  const [presetLoading, setPresetLoading] = useState(false);
+  const inflight = useRef<Map<string, Promise<Row[]>>>(new Map());
+
+  const currentKey = `${oneSided ? "one" : "any"}:${typeKey}:${stale}`;
+
+  useEffect(() => {
+    if (presetCache[currentKey] !== undefined) return;
+    const existing = inflight.current.get(currentKey);
+    if (existing) return;
+    setPresetLoading(true);
+    const params = new URLSearchParams({
+      stale: String(stale),
+      type: typeKey,
+      oneSided: oneSided ? "1" : "0",
+    });
+    const p = fetch(`/api/archive-candidates?${params.toString()}`)
+      .then((res) => res.json())
+      .then((j: { rows?: Row[]; error?: string }) => {
+        if (j.error) throw new Error(j.error);
+        return j.rows ?? [];
+      })
+      .then((rows) => {
+        setPresetCache((prev) => ({ ...prev, [currentKey]: rows }));
+        return rows;
+      })
+      .catch((err) => {
+        toast.error(`Failed to load preset: ${(err as Error).message}`);
+        return [] as Row[];
+      })
+      .finally(() => {
+        inflight.current.delete(currentKey);
+        setPresetLoading(false);
+      });
+    inflight.current.set(currentKey, p);
+  }, [currentKey, stale, typeKey, oneSided, presetCache]);
+
   const candidates = useMemo(() => {
-    const key = `${oneSided ? "one" : "any"}:${typeKey}:${stale}`;
-    const base = candidatesByPreset[key] ?? [];
+    const base = presetCache[currentKey] ?? [];
     if (minSize === 0) return base;
     return base.filter((r) => effectiveSize(r) >= minSize);
-  }, [candidatesByPreset, typeKey, stale, oneSided, minSize]);
+  }, [presetCache, currentKey, minSize]);
 
   const allSelected = candidates.length > 0 && candidates.every((r) => selected.has(r.username));
 
@@ -363,10 +412,22 @@ export function HygienePanel({
         </label>
 
         <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">
-            {candidates.length.toLocaleString()} candidate{candidates.length === 1 ? "" : "s"} ·{" "}
-            <span className="text-foreground font-medium">{selected.size}</span> selected
-            {oneSided && <span className="text-amber-600 dark:text-amber-400 ml-2">· one-sided filter on</span>}
+          <p className="text-sm text-muted-foreground inline-flex items-center gap-2">
+            {presetLoading ? (
+              <>
+                <Loader2 className="size-3 animate-spin" /> Loading…
+              </>
+            ) : (
+              <>
+                {candidates.length.toLocaleString()} candidate{candidates.length === 1 ? "" : "s"} ·{" "}
+                <span className="text-foreground font-medium">{selected.size}</span> selected
+                {oneSided && (
+                  <span className="text-amber-600 dark:text-amber-400 ml-2">
+                    · one-sided filter on
+                  </span>
+                )}
+              </>
+            )}
           </p>
           <Button disabled={busy || selected.size === 0} onClick={doArchive} size="sm" className="gap-1.5">
             {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Archive className="size-3.5" />}
@@ -374,7 +435,11 @@ export function HygienePanel({
           </Button>
         </div>
 
-        {candidates.length === 0 ? (
+        {presetLoading && candidates.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-8 text-center border rounded-md inline-flex items-center justify-center gap-2 w-full">
+            <Loader2 className="size-3.5 animate-spin" /> Loading preset…
+          </p>
+        ) : candidates.length === 0 ? (
           <p className="text-sm text-muted-foreground py-8 text-center border rounded-md">
             No candidates with these filters.
           </p>
