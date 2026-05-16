@@ -89,7 +89,9 @@ function ensureSchema(db: DB) {
     );
     CREATE INDEX IF NOT EXISTS idx_urls_group ON urls(domain_group, timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_urls_domain ON urls(domain, timestamp DESC);
-    CREATE INDEX IF NOT EXISTS idx_urls_chat ON urls(chat_display);
+    -- idx_urls_chat (on chat_display) was here; superseded by the partial
+    -- idx_urls_chat_username added by the migration block below. Dropped
+    -- there with IF EXISTS so existing DBs upgrade cleanly.
     CREATE INDEX IF NOT EXISTS idx_urls_sender ON urls(sender);
     CREATE INDEX IF NOT EXISTS idx_urls_ts ON urls(timestamp DESC);
     -- uniq_url_msg(content_hash, url) was the original dedup key but two
@@ -156,8 +158,19 @@ function applyMigrations(db: DB) {
     db.exec("ALTER TABLE sessions ADD COLUMN last_history_error TEXT");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_archived ON sessions(archived)");
+  // `idx_messages_chat_username` and `idx_urls_chat` were originally added to
+  // accelerate single-column lookups on `chat_username` / `chat_display`. Both
+  // are redundant given the wider `idx_messages_chat (chat_username, ts DESC)`
+  // and `idx_urls_chat_username` partial index — the planner already prefers
+  // those for the same queries. Drop the dead weight; together they free
+  // ~32 MB on a 1 GB DB. Not destructive — schema, not data. The CREATE
+  // statements above used to live here; we now make this one-time DROP
+  // idempotent by including IF EXISTS so older DBs upgrade cleanly.
+  db.exec("DROP INDEX IF EXISTS idx_messages_chat_username");
+  db.exec("DROP INDEX IF EXISTS idx_urls_chat");
+  // Keep the partial `idx_urls_chat_username` (covers most read paths) and
+  // re-create it here for new databases that skipped the pre-drop block.
   db.exec("CREATE INDEX IF NOT EXISTS idx_urls_chat_username ON urls(chat_username) WHERE chat_username IS NOT NULL");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_messages_chat_username ON messages(chat_username) WHERE chat_username IS NOT NULL");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS group_members (
