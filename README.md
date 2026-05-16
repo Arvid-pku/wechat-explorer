@@ -72,64 +72,96 @@ You can also trigger either mode from **Settings → Reindex** inside the app.
 
 ## Pages
 
-- **Overview** — totals, 365-day activity, message-type breakdown, top link sources.
-- **Contacts** — every session ranked by recent / messages / links / name, filterable by chat type. Click any row for a deep dive.
-- **Contact detail** — session stats, recent messages, top senders, link breakdown.
-- **Links** — every shared URL grouped by domain (公众号 / 小红书 / B站 / arxiv / github / …). Each group has a faceted view with sender + chat filters.
-- **Search** — FTS5 across all indexed message content with trigram tokenization (Chinese substring matching just works).
-- **Calendar** — year heatmap; click any day to see messages from that date.
-- **Reading queue** — long-form links (公众号 articles, 小红书, 知乎, Medium, Substack) latest first.
-- **Settings** — index status, manual refresh, storage info.
+- **Overview** (`/`) — totals (each card links to a `/stats/<topic>` drilldown), 365-day activity with 7-day rolling average, message-type breakdown, top link sources, surprises panel.
+- **Contacts** (`/contacts`) — every session ranked by recent / messages / links / name, filterable by chat type and by active / archived / all view.
+- **Contact detail** (`/contacts/[username]`) — monthly bars, hourly grid, reply latency histograms, style fingerprint, topic word cloud, vocab diff, top senders (groups), shared content, recent 50 messages.
+- **Links** (`/links`) — domain-group grid; per-group page has faceted view + CSV/JSON export + sender/chat filters.
+- **Search** (`/search`) — FTS5 trigram tokeniser; 2-char CJK queries fall back to LIKE.
+- **Calendar** (`/calendar`) — year heatmap; day-detail with hourly heatmap, TF-IDF keyword cloud, on-this-day, per-chat collapsible groups.
+- **Reading queue** (`/reading`) — long-form links (公众号 / 小红书 / 知乎 / Medium / Substack) latest first.
+- **Recap** (`/recap/[year]` and `/recap/[year]/[chat_username]`) — Spotify-Wrapped-style year-in-review with monthly bars, hourly grid, top contacts/groups/domains, records, word cloud, latency, new contacts, first/last message, year-over-year diff, top emoji. `/api/recap/[year]/export` produces a self-contained HTML download.
+- **Graph** (`/graph`) — force-directed relationship graph (groups + people + you) with min-group-size / min-co-occurrence / max-groups filters, show-names toggle, and include-archived toggle.
+- **Stats drilldowns** (`/stats/sessions|messages|links|contacts`) — Recharts donuts, treemap, radial hour chart, stacked area, etc. Reached from the Overview StatCards.
+- **Settings** (`/settings`) — index status, manual reindex, chat hygiene (stale + one-sided + size-based archive), me-handle detection, member-count + group-membership backfill.
 
 ## Layout
 
 ```
 app/
-  layout.tsx                 root layout (providers + shell)
-  page.tsx                   Overview
-  contacts/                  list + [username]/detail
-  links/                     index + [group]/drill-down
-  search/                    FTS5 client view
-  calendar/                  year heatmap + day detail
-  reading/                   curated long-form link list
-  settings/                  index status + reindex actions
+  layout.tsx                       root layout (Providers + AppShell + theme init script)
+  page.tsx                         Overview (links to /stats/<topic>)
+  contacts/                        list + [username]/detail (analytics dashboard)
+  links/                           index + [group]/drill-down + export buttons
+  search/                          FTS5 + LIKE fallback (client view)
+  calendar/                        year heatmap + day-detail (keywords, on-this-day, hourly, per-chat)
+  reading/                         curated long-form link list
+  settings/                        index status + reindex + hygiene + me-handles + members
+  graph/                           d3-force relationship graph
+  recap/[year]/                    year-in-review (+ [chat_username]/ per-chat variant)
+  stats/                           sessions/messages/links/contacts Recharts drilldowns
   api/
-    search/route.ts          GET ?q=...
-    index/route.ts           POST ?mode=quick|deep
+    search/route.ts                GET ?q=...&archived=1
+    index/route.ts                 POST ?mode=quick|deep
+    archive/route.ts               archive/restore session bulk-ops
+    me-handles/route.ts            GET/POST current me-handle list
+    member-counts/route.ts         POST ?limit= → fetches members for N more groups
+    export/[kind]/route.ts         CSV/JSON dump for sessions/links/messages/contacts/domains
+    recap/[year]/export/route.ts   self-contained HTML download
 
 components/
-  app-shell.tsx              sidebar + header + cmdk wrapper
+  app-shell.tsx                    sidebar + header + cmdk wrapper + keyboard shortcuts
   app-sidebar.tsx
-  command-palette.tsx        ⌘K (navigate + jump-to-search)
-  theme-toggle.tsx           light/dark/system
-  providers.tsx              theme + react-query + tooltip
-  search-view.tsx            client component for /search
+  command-palette.tsx              ⌘K (navigate + jump-to-search) + shortcut hint strip
+  keyboard-shortcuts.tsx           j/k row nav, g-prefix go-to-page, / opens palette
+  archived-toggle.tsx              shared "Include archived" pill + buildArchivedToggleHref()
+  archive-toggle.tsx               per-session archive/restore button (contact detail header)
+  theme-provider.tsx               in-house ThemeProvider (replaces next-themes; Next 16 hated its <script>)
+  theme-toggle.tsx
+  providers.tsx                    Theme + React Query + Tooltip
+  search-view.tsx                  client component for /search (with archived toggle)
   charts/
-    activity-chart.tsx       365-day area chart
-    top-domains-bar.tsx      ranked horizontal bars
-    msg-type-list.tsx        type breakdown bars
-    year-heatmap.tsx         GitHub-style calendar
+    activity-chart.tsx             365-day area + 7-day rolling line
+    top-domains-bar.tsx, msg-type-list.tsx, year-heatmap.tsx
+    sparkline.tsx                  pure-SVG inline sparkline
+    hourly-grid.tsx, hourly-heatmap.tsx
+    keyword-cloud.tsx, word-cloud.tsx
+    latency-histogram.tsx, monthly-activity-chart.tsx
+    recap/                         monthly-bars, hourly-grid, latency-hist, keyword-cloud, horizontal-bars
+    stats/charts.tsx               Donut, VerticalBars, StackedArea, LineWithBars, HourRadial, DomainTreemap
 
 lib/
-  wx.ts                      typed wrappers around `wx` CLI
-  db.ts                      bun:sqlite + schema + meta helpers
-  url-parser.ts              URL extraction + domain grouping
-  indexer.ts                 sessions/contacts/links/history indexers
-  queries.ts                 read-side query helpers used by pages
-  utils.ts                   shadcn helper
+  wx.ts                            typed wrappers around `wx` CLI
+  db.ts                            better-sqlite3 + schema + additive migrations + `urls_dedup` view
+  url-parser.ts                    URL extraction + domain grouping
+  indexer.ts                       sessions/contacts/links/history indexers
+  queries.ts                       core read-side helpers + EXCLUDED_SUBQUERY + excludedSubquery()
+  queries.calendar.ts              calendar day/year detail queries
+  queries.contact.ts               contact analytics queries + global token baseline cache
+  queries.graph.ts                 graph data assembly + group/people/me node + co-occurrence edges
+  recap.ts                         year-recap aggregation (5-min in-process cache) + YoY baseline
+  recap-html.ts                    inline-CSS + inline-SVG renderer for the HTML export
+  stats.ts                         per-topic /stats/ drilldown queries
+  surprises.ts                     overview anomaly cards (spike, dry-streak, fresh contact, etc.)
+  text.ts                          Intl.Segmenter + CJK/EN stopwords + TF-IDF + emoji counting
+  latency.ts                       reply-latency math (bucketing, percentiles, formatting)
+  utils.ts                         shadcn cn() helper
 
 scripts/
-  index.ts                   CLI: bun run scripts/index.ts [--deep|--full]
+  index.ts                         CLI: bun run scripts/index.ts [--deep|--full]
+  probe-onesided.ts, probe-sizes.ts
 ```
 
 ## Adding a new view (cookbook)
 
 Want a per-sender deep-dive page, or a "papers shared in 2025" view? The skeleton:
 
-1. Add a new SQL query helper to `lib/queries.ts`.
-2. Add a page at `app/<feature>/page.tsx` calling the helper (server component, no API needed).
-3. If interactive, factor the client bits into a separate `"use client"` component.
-4. Add the route to `components/app-sidebar.tsx` (and to the cmdk palette in `command-palette.tsx`).
+1. Add a new SQL query helper to `lib/queries.ts` (or a topic-specific module like `lib/queries.contact.ts`). Always parameterise — never string-interpolate user input.
+2. Apply `excludedSubquery({ includeArchived })` to filter sessions in stats / search / link contexts. Most pages take an `?archived=1` searchParam.
+3. Use `urls_dedup` (a view in `lib/db.ts`) instead of `urls` for any link read query — `urls` has duplicates from the two ingestion paths.
+4. Add a page at `app/<feature>/page.tsx` calling the helper (server component, `export const dynamic = "force-dynamic"`).
+5. If interactive, factor the client bits into a separate `"use client"` component.
+6. Add the route to `components/app-sidebar.tsx` and to the cmdk palette in `command-palette.tsx`.
+7. For tables and lists with rows you want the `j/k` keyboard nav to recognise, add `data-jk-row` to each row element.
 
 ## Extending the domain classifier
 
