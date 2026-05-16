@@ -67,6 +67,7 @@ export default async function Page() {
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
+          href="/stats/sessions"
           title="Sessions"
           value={fmtNum(o.sessions.total)}
           sub={
@@ -78,6 +79,7 @@ export default async function Page() {
           }
         />
         <StatCard
+          href="/stats/messages"
           title="Indexed messages"
           value={fmtNum(o.messages.total)}
           sub={
@@ -87,11 +89,13 @@ export default async function Page() {
           }
         />
         <StatCard
+          href="/stats/links"
           title="Shared links"
           value={fmtNum(o.urls.total)}
           sub={<span className="text-xs text-muted-foreground">{fmtNum(o.urls.uniqueDomains)} unique domains</span>}
         />
         <StatCard
+          href="/stats/contacts"
           title="Contacts"
           value={fmtNum(o.contacts)}
           sub={<span className="text-xs text-muted-foreground">in your address book</span>}
@@ -174,16 +178,40 @@ export default async function Page() {
   );
 }
 
-function StatCard({ title, value, sub }: { title: string; value: string; sub?: React.ReactNode }) {
-  return (
-    <Card>
+function StatCard({
+  title,
+  value,
+  sub,
+  href,
+}: {
+  title: string;
+  value: string;
+  sub?: React.ReactNode;
+  href?: string;
+}) {
+  const inner = (
+    <Card className={href ? "h-full transition-colors hover:border-primary/40 cursor-pointer" : "h-full"}>
       <CardHeader className="pb-2">
-        <CardDescription>{title}</CardDescription>
+        <CardDescription className="inline-flex items-center gap-1">
+          {title}
+          {href && (
+            <span className="text-muted-foreground/60 text-[10px] transition-opacity group-hover:opacity-100 opacity-50">
+              ↗
+            </span>
+          )}
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-1.5">
         <div className="text-3xl font-semibold tracking-tight">{value}</div>
         {sub}
       </CardContent>
     </Card>
+  );
+  return href ? (
+    <Link href={href} className="group block">
+      {inner}
+    </Link>
+  ) : (
+    inner
   );
 }
