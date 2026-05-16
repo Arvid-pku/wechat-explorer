@@ -9,7 +9,9 @@
     "lint": "eslint",
     "index:quick": "tsx scripts/index.ts",
     "index:deep": "tsx scripts/index.ts --deep",
-    "index:full": "tsx scripts/index.ts --full"
+    "index:full": "tsx scripts/index.ts --full",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
@@ -36,14 +38,16 @@
     "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^7.6.13",
     "@types/d3": "^7.4.3",
-    "@types/node": "^20",
+    "@types/node": "^20.19.41",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/ui": "^4.1.6",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "tailwindcss": "^4",
     "tsx": "^4.22.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.6"
   },
   "ignoreScripts": [
     "sharp",
