@@ -84,8 +84,10 @@ export async function getSessions(limit = 10_000): Promise<RawSession[]> {
   return data.sessions ?? [];
 }
 
-export async function getContacts(limit = 10_000): Promise<RawContact[]> {
-  const out = await runWx(["contacts", "--limit", String(limit), "--json"]);
+export async function getContacts(limit = 500_000): Promise<RawContact[]> {
+  // wx contacts can return tens of thousands of rows on a busy account;
+  // bump the runWx timeout so a slow first fetch doesn't get killed.
+  const out = await runWx(["contacts", "--limit", String(limit), "--json"], 180_000);
   const data = parseJsonLoose<RawContact[] | { contacts: RawContact[] }>(out);
   return Array.isArray(data) ? data : (data.contacts ?? []);
 }

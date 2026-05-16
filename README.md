@@ -139,7 +139,7 @@ since it's user-facing (`"arxiv"`, `"github"`, `"小红书"`, …).
 
 ## Known limitations
 
-- `wx contacts` is capped at 20 k entries in the current pipe; adjust in `lib/indexer.ts` if needed.
+- `wx contacts` is fetched up to 500 k entries; if your address book is larger, bump the cap in `lib/indexer.ts`.
 - Reading-queue "read/unread" toggle is not yet persisted (Tier 2 follow-up).
 - AI features (style learning, draft replies, topic clustering) are intentionally left out
   for the first cut to keep the app token-free. They're the natural Tier 4 follow-up.

@@ -64,7 +64,10 @@ export async function indexSessions(onProgress: ProgressCb = () => {}) {
 
 export async function indexContacts(onProgress: ProgressCb = () => {}) {
   onProgress({ stage: "contacts:fetch" });
-  const contacts = await getContacts(20_000);
+  // Cap deliberately generous — a busy account easily has 50k+ entries once
+  // group members are folded in. Use a single oversized fetch instead of
+  // pagination so the wx CLI pipe drains in one pass.
+  const contacts = await getContacts(500_000);
   const db = getDb();
   const upsert = db.prepare(`
     INSERT INTO contacts (username, display_name) VALUES (?, ?)
