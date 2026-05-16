@@ -31,6 +31,9 @@ import {
   HourRadial,
   MultiLine,
 } from "@/components/charts/stats/charts";
+import type { MeTimePoint } from "@/lib/me-stats";
+import { t, type TKey } from "@/lib/i18n";
+import { getServerLocale } from "@/lib/i18n-server";
 import { LatencyHistogram } from "@/components/charts/latency-histogram";
 import { WordCloud } from "@/components/charts/word-cloud";
 import { formatLatency } from "@/lib/latency";
@@ -49,13 +52,20 @@ const VALID_AGGS: MeAggregation[] = ["week", "month", "year"];
 export default async function MePage({
   searchParams,
 }: {
-  searchParams: Promise<{ agg?: string }>;
+  searchParams: Promise<{ agg?: string; split?: string }>;
 }) {
   const sp = await searchParams;
   const agg: MeAggregation =
     sp.agg && (VALID_AGGS as string[]).includes(sp.agg)
       ? (sp.agg as MeAggregation)
       : "month";
+  // `?split=1` flips the "Your messages over time" chart from 2 lines
+  // (you / them) to 3 lines (you / them-private / them-group). The split data
+  // is always computed in me-stats; this param only toggles which series the
+  // chart renders.
+  const splitTheirs = sp.split === "1";
+  const locale = await getServerLocale();
+  const tr = (k: TKey) => t(k, locale);
   const s = getMeStats({ agg });
 
   if (!s.hasData) {
@@ -97,10 +107,10 @@ export default async function MePage({
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-8">
       <header className="space-y-2">
         <p className="text-xs uppercase tracking-widest text-muted-foreground">
-          From your perspective
+          {tr("me.eyebrow")}
         </p>
         <h1 className="text-3xl font-semibold tracking-tight flex items-center gap-2">
-          <Sparkles className="size-5 text-primary" /> You in numbers
+          <Sparkles className="size-5 text-primary" /> {tr("me.title")}
         </h1>
         <p className="text-sm text-muted-foreground">
           {fmt(s.totals.myMessages)} messages from you across {fmt(s.totals.activeDays)}{" "}
@@ -118,25 +128,33 @@ export default async function MePage({
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Hero
           icon={<MessageSquare className="size-4" />}
-          label="Messages you sent"
+          label={tr("me.heroMessages")}
           value={fmt(s.totals.myMessages)}
-          sub={`${pct(s.totals.mySharePct)} of all indexed conversation`}
+          sub={`${pct(s.totals.mySharePct)} ${tr("me.heroShare")}`}
         />
         <Hero
           icon={<CalendarCheck className="size-4" />}
-          label="Active days"
+          label={tr("me.heroActiveDays")}
           value={fmt(s.totals.activeDays)}
-          sub={`Longest streak ${s.totals.longestStreak}d · ${s.totals.msgsPerActiveDay.toFixed(1)} msgs/day on active days`}
+          sub={
+            locale === "zh"
+              ? `最长连续 ${s.totals.longestStreak} 天 · 活跃日均 ${s.totals.msgsPerActiveDay.toFixed(1)} 条`
+              : `Longest streak ${s.totals.longestStreak}d · ${s.totals.msgsPerActiveDay.toFixed(1)} msgs/day on active days`
+          }
         />
         <Hero
           icon={<Clock className="size-4" />}
-          label="Peak hour"
+          label={tr("me.heroPeakHour")}
           value={`${String(s.totals.peakHour).padStart(2, "0")}:00`}
-          sub={`${fmt(s.totals.peakHourCount)} messages sent in that hour`}
+          sub={
+            locale === "zh"
+              ? `这一小时共发出 ${fmt(s.totals.peakHourCount)} 条`
+              : `${fmt(s.totals.peakHourCount)} messages sent in that hour`
+          }
         />
         <Hero
           icon={<Flame className="size-4" />}
-          label="Median reply"
+          label={tr("me.heroMedianReply")}
           value={
             s.latency.meToThemMedianSec > 0
               ? formatLatency(s.latency.meToThemMedianSec)
@@ -144,11 +162,50 @@ export default async function MePage({
           }
           sub={
             s.latency.themToMeMedianSec > 0
-              ? `Theirs to you: ${formatLatency(s.latency.themToMeMedianSec)}`
-              : "Not enough reply pairs"
+              ? `${tr("me.heroTheirReply")}: ${formatLatency(s.latency.themToMeMedianSec)}`
+              : tr("me.heroNoLatency")
           }
         />
       </section>
+
+      {/* Year-over-year strip — rolling 365d window vs the prior 365d. */}
+      {s.yoy.myMessagesPrior > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">{tr("me.vsLastYear")}</CardTitle>
+            <CardDescription>
+              {s.yoy.reliable
+                ? `${tr("me.vsLastYearDesc")} ${fmt(s.yoy.myMessages)} ${locale === "zh" ? "条" : "sent vs"} ${fmt(s.yoy.myMessagesPrior)} ${locale === "zh" ? "（去年同期）。" : "the year before."}`
+                : tr("me.vsLastYearUnreliable")}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <YoYStat
+                label={tr("me.heroMessages")}
+                current={s.yoy.myMessages}
+                prior={s.yoy.myMessagesPrior}
+              />
+              <YoYStat
+                label={tr("me.theirMessages")}
+                current={Math.max(0, s.yoy.totalMessages - s.yoy.myMessages)}
+                prior={Math.max(0, s.yoy.totalMessagesPrior - s.yoy.myMessagesPrior)}
+              />
+              <YoYStat
+                label={tr("me.yourShare")}
+                current={s.yoy.mySharePct}
+                prior={s.yoy.mySharePctPrior}
+                kind="pct"
+              />
+              <YoYStat
+                label={tr("me.heroActiveDays")}
+                current={s.yoy.activeDays}
+                prior={s.yoy.activeDaysPrior}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Activity over time with agg switcher */}
       {s.series.length > 0 && (
@@ -156,20 +213,37 @@ export default async function MePage({
           <CardHeader>
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div>
-                <CardTitle>Your messages over time</CardTitle>
+                <CardTitle>{tr("me.overTimeTitle")}</CardTitle>
                 <CardDescription>
-                  Two lines: you vs them per{" "}
-                  {s.agg === "week" ? "week" : s.agg === "year" ? "year" : "month"}.
+                  {(() => {
+                    const unit = tr(
+                      s.agg === "week"
+                        ? "common.week"
+                        : s.agg === "year"
+                          ? "common.year"
+                          : "common.month",
+                    );
+                    return splitTheirs
+                      ? `${tr("me.overTimeThree")} ${unit}.`
+                      : `${tr("me.overTimeTwo")} ${unit}.`;
+                  })()}
                 </CardDescription>
               </div>
-              <AggSwitch current={s.agg} />
+              <div className="flex items-center gap-2 flex-wrap">
+                <SplitToggle current={splitTheirs} agg={s.agg} locale={locale} />
+                <AggSwitch current={s.agg} split={splitTheirs} locale={locale} />
+              </div>
             </div>
           </CardHeader>
           <CardContent>
-            <TwoSeriesLine
-              data={s.series.map((p) => ({ label: p.label, a: p.mine, b: p.theirs }))}
-              seriesLabels={["You", "Them"]}
-            />
+            {splitTheirs ? (
+              <ThemActivityChart series={s.series} locale={locale} />
+            ) : (
+              <TwoSeriesLine
+                data={s.series.map((p) => ({ label: p.label, a: p.mine, b: p.theirs }))}
+                seriesLabels={[tr("common.you"), tr("common.them")]}
+              />
+            )}
           </CardContent>
         </Card>
       )}
@@ -550,18 +624,35 @@ export default async function MePage({
   );
 }
 
-function AggSwitch({ current }: { current: MeAggregation }) {
+function meHref(agg: MeAggregation, split: boolean): string {
+  const qs = new URLSearchParams();
+  if (agg !== "month") qs.set("agg", agg);
+  if (split) qs.set("split", "1");
+  const str = qs.toString();
+  return str ? `/me?${str}` : "/me";
+}
+
+function AggSwitch({
+  current,
+  split,
+  locale,
+}: {
+  current: MeAggregation;
+  split: boolean;
+  locale: "en" | "zh";
+}) {
+  const tr = (k: TKey) => t(k, locale);
   const opts: { key: MeAggregation; label: string }[] = [
-    { key: "week", label: "Week" },
-    { key: "month", label: "Month" },
-    { key: "year", label: "Year" },
+    { key: "week", label: tr("common.week") },
+    { key: "month", label: tr("common.month") },
+    { key: "year", label: tr("common.year") },
   ];
   return (
     <div className="inline-flex rounded-md border border-border/60 p-[2px] text-xs">
       {opts.map((o) => (
         <Link
           key={o.key}
-          href={`/me?agg=${o.key}`}
+          href={meHref(o.key, split)}
           className={`rounded px-2.5 py-1 font-medium transition-colors ${
             current === o.key
               ? "bg-accent text-foreground"
@@ -572,6 +663,78 @@ function AggSwitch({ current }: { current: MeAggregation }) {
         </Link>
       ))}
     </div>
+  );
+}
+
+function SplitToggle({
+  current,
+  agg,
+  locale,
+}: {
+  current: boolean;
+  agg: MeAggregation;
+  locale: "en" | "zh";
+}) {
+  const tr = (k: TKey) => t(k, locale);
+  // Sits next to AggSwitch — same visual idiom. Toggles whether `theirs` is
+  // shown as one line or split by chat_type (private + group).
+  const opts: { key: boolean; label: string; title: string }[] = [
+    {
+      key: false,
+      label: tr("common.combined"),
+      title: locale === "zh" ? "对方消息合并为一条线" : "Show all of their messages as a single line",
+    },
+    {
+      key: true,
+      label: tr("common.splitByType"),
+      title: locale === "zh" ? "把对方消息拆分为私聊和群聊" : "Break out their messages into private chats vs groups",
+    },
+  ];
+  return (
+    <div className="inline-flex rounded-md border border-border/60 p-[2px] text-xs">
+      {opts.map((o) => (
+        <Link
+          key={String(o.key)}
+          href={meHref(agg, o.key)}
+          title={o.title}
+          className={`rounded px-2.5 py-1 font-medium transition-colors ${
+            current === o.key
+              ? "bg-accent text-foreground"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          {o.label}
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function ThemActivityChart({
+  series,
+  locale,
+}: {
+  series: MeTimePoint[];
+  locale: "en" | "zh";
+}) {
+  const tr = (k: TKey) => t(k, locale);
+  // 3-line view: you / their private / their group. `theirsOther` (NULL
+  // chat_username, official, folded — usually < 1% of volume) is folded into
+  // the tooltip via title but kept off the chart for legibility.
+  return (
+    <MultiLine
+      data={series.map((p) => ({
+        label: p.label,
+        you: p.mine,
+        them_private: p.theirsPrivate,
+        them_group: p.theirsGroup,
+      }))}
+      series={[
+        { key: "you", label: tr("common.you") },
+        { key: "them_private", label: `${tr("common.them")} · ${tr("common.private")}` },
+        { key: "them_group", label: `${tr("common.them")} · ${tr("common.groups")}` },
+      ]}
+    />
   );
 }
 
@@ -599,6 +762,50 @@ function Hero({
         {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
       </CardContent>
     </Card>
+  );
+}
+
+function YoYStat({
+  label,
+  current,
+  prior,
+  kind = "count",
+}: {
+  label: string;
+  current: number;
+  prior: number;
+  kind?: "count" | "pct";
+}) {
+  // For percentages the "delta" is in absolute pp (percentage-points). For raw
+  // counts it's a relative percent — same display logic, different units.
+  const delta = kind === "pct" ? current - prior : prior > 0 ? ((current - prior) / prior) * 100 : 0;
+  const arrow = delta > 0.5 ? "▲" : delta < -0.5 ? "▼" : "·";
+  const tone =
+    delta > 0.5
+      ? "text-emerald-600 dark:text-emerald-400"
+      : delta < -0.5
+        ? "text-rose-600 dark:text-rose-400"
+        : "text-muted-foreground";
+  const valueDisplay =
+    kind === "pct" ? `${current.toFixed(1)}%` : new Intl.NumberFormat("en").format(current);
+  const priorDisplay =
+    kind === "pct" ? `${prior.toFixed(1)}%` : new Intl.NumberFormat("en").format(prior);
+  const deltaDisplay =
+    kind === "pct"
+      ? `${delta > 0 ? "+" : ""}${delta.toFixed(1)}pp`
+      : prior > 0
+        ? `${delta > 0 ? "+" : ""}${delta.toFixed(0)}%`
+        : "—";
+  return (
+    <div className="space-y-1">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-xl font-semibold tabular-nums">{valueDisplay}</p>
+      <p className={`text-xs ${tone} tabular-nums inline-flex items-center gap-1`}>
+        <span aria-hidden>{arrow}</span>
+        <span>{deltaDisplay}</span>
+        <span className="text-muted-foreground/70">(was {priorDisplay})</span>
+      </p>
+    </div>
   );
 }
 
@@ -663,61 +870,8 @@ function CompactRanking({
   );
 }
 
-function ChatRanking({
-  rows,
-  showMembers,
-}: {
-  rows: {
-    username: string;
-    display_name: string;
-    my_msgs: number;
-    total: number;
-    theirs: number;
-    member_count: number | null;
-    last_ts: number | null;
-  }[];
-  showMembers?: boolean;
-}) {
-  const max = rows.reduce((a, b) => Math.max(a, b.my_msgs), 0) || 1;
-  return (
-    <ul className="space-y-1.5">
-      {rows.map((r) => (
-        <li key={r.username}>
-          <Link
-            href={`/contacts/${encodeURIComponent(r.username)}`}
-            className="group block rounded px-1.5 py-1 hover:bg-accent/60 transition-colors"
-          >
-            <div className="flex items-center justify-between text-sm gap-3">
-              <span className="truncate group-hover:text-primary">
-                {r.display_name || r.username}
-              </span>
-              <span className="text-muted-foreground tabular-nums text-xs whitespace-nowrap">
-                {r.my_msgs.toLocaleString()}
-                {r.total > 0 && (
-                  <span className="text-muted-foreground/60 ml-1">
-                    / {r.total.toLocaleString()}
-                  </span>
-                )}
-              </span>
-            </div>
-            <div className="mt-1 h-1 rounded-full bg-muted overflow-hidden">
-              <div
-                className="h-full bg-primary/70 group-hover:bg-primary"
-                style={{ width: `${(r.my_msgs / max) * 100}%` }}
-              />
-            </div>
-            {(showMembers || r.theirs > 0) && (
-              <p className="text-[10px] text-muted-foreground mt-0.5 tabular-nums">
-                {showMembers && r.member_count != null && `${r.member_count} members · `}
-                {r.theirs > 0 && `${r.theirs.toLocaleString()} theirs`}
-              </p>
-            )}
-          </Link>
-        </li>
-      ))}
-    </ul>
-  );
-}
+// (ChatRanking was a never-used leftover from an earlier draft of /me — the
+// MultiLine + CompactRanking pair above replaced it.)
 
 function DomainList({ rows }: { rows: { domain_group: string; n: number }[] }) {
   const max = rows.reduce((a, b) => Math.max(a, b.n), 0) || 1;

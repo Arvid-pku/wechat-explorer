@@ -11,6 +11,8 @@ import { Sparkles, TrendingUp, TrendingDown, UserPlus, Activity, Trophy, ArrowUp
 import { ActivityChart } from "@/components/charts/activity-chart";
 import { TopDomainsBar } from "@/components/charts/top-domains-bar";
 import { MsgTypeList } from "@/components/charts/msg-type-list";
+import { t, type Locale, type TKey } from "@/lib/i18n";
+import { getServerLocale } from "@/lib/i18n-server";
 
 const SURPRISE_ICONS = {
   spike: TrendingUp,
@@ -28,6 +30,8 @@ function fmtNum(n: number) {
 }
 
 export default async function Page() {
+  const locale = await getServerLocale();
+  const tr = (k: TKey) => t(k, locale);
   const o = getOverview();
   const lastIndexed = o.lastIndexedAt ? new Date(Number(o.lastIndexedAt)) : null;
   const years = getRecapYears();
@@ -37,11 +41,11 @@ export default async function Page() {
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-8">
       <header className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{tr("overview.title")}</h1>
           <p className="text-sm text-muted-foreground mt-1">
             {lastIndexed
-              ? `Index refreshed ${formatDistanceToNow(lastIndexed, { addSuffix: true })}`
-              : "Index has not been built yet"}
+              ? `${tr("overview.lastRefreshed")} ${formatDistanceToNow(lastIndexed, { addSuffix: true })}`
+              : tr("overview.notIndexed")}
           </p>
         </div>
         {latestYear && (
@@ -51,7 +55,7 @@ export default async function Page() {
               className="inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-3 py-1.5 text-sm font-medium hover:opacity-90"
             >
               <Sparkles className="size-3.5" />
-              {latestYear} in Review
+              {latestYear} {tr("overview.recap")}
             </Link>
             {years.slice(1, 4).map((y) => (
               <Link
@@ -69,45 +73,68 @@ export default async function Page() {
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           href="/stats/sessions"
-          title="Sessions"
+          title={tr("overview.sessions")}
           value={fmtNum(o.sessions.total)}
           sub={
             <span className="text-xs text-muted-foreground space-x-2">
-              <Badge variant="secondary" className="font-normal">{fmtNum(o.sessions.private)} private</Badge>
-              <Badge variant="secondary" className="font-normal">{fmtNum(o.sessions.group)} group</Badge>
-              <Badge variant="secondary" className="font-normal">{fmtNum(o.sessions.official)} official</Badge>
+              <Badge variant="secondary" className="font-normal">
+                {fmtNum(o.sessions.private)} {locale === "zh" ? "私聊" : "private"}
+              </Badge>
+              <Badge variant="secondary" className="font-normal">
+                {fmtNum(o.sessions.group)} {locale === "zh" ? "群聊" : "group"}
+              </Badge>
+              <Badge variant="secondary" className="font-normal">
+                {fmtNum(o.sessions.official)} {locale === "zh" ? "公众号" : "official"}
+              </Badge>
             </span>
           }
         />
         <StatCard
           href="/stats/messages"
-          title="Indexed messages"
+          title={tr("overview.indexedMessages")}
           value={fmtNum(o.messages.total)}
           sub={
-            <span className="text-xs text-muted-foreground">
-              {fmtNum(o.messages.last30d)} in last 30 days · {fmtNum(o.messages.last7d)} this week
+            <span className="text-xs text-muted-foreground inline-flex items-center gap-1 flex-wrap">
+              <span>
+                {locale === "zh"
+                  ? `近 30 天 ${fmtNum(o.messages.last30d)} · 本周 ${fmtNum(o.messages.last7d)}`
+                  : `${fmtNum(o.messages.last30d)} in last 30 days · ${fmtNum(o.messages.last7d)} this week`}
+              </span>
+              {o.messages.prior30d > 0 && (
+                <PeriodDelta current={o.messages.last30d} prior={o.messages.prior30d} />
+              )}
             </span>
           }
         />
         <StatCard
           href="/stats/links"
-          title="Shared links"
+          title={tr("overview.sharedLinks")}
           value={fmtNum(o.urls.total)}
-          sub={<span className="text-xs text-muted-foreground">{fmtNum(o.urls.uniqueDomains)} unique domains</span>}
+          sub={
+            <span className="text-xs text-muted-foreground">
+              {locale === "zh"
+                ? `${fmtNum(o.urls.uniqueDomains)} 个独立域名`
+                : `${fmtNum(o.urls.uniqueDomains)} unique domains`}
+            </span>
+          }
         />
         <StatCard
           href="/stats/contacts"
-          title="Contacts"
+          title={tr("overview.contacts")}
           value={fmtNum(o.contacts)}
-          sub={<span className="text-xs text-muted-foreground">in your address book</span>}
+          sub={
+            <span className="text-xs text-muted-foreground">
+              {locale === "zh" ? "通讯录中" : "in your address book"}
+            </span>
+          }
         />
       </section>
 
       <section className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Activity (last 365 days)</CardTitle>
-            <CardDescription>Daily message count across all indexed chats</CardDescription>
+            <CardTitle>{tr("overview.activity365")}</CardTitle>
+            <CardDescription>{tr("overview.activity365Desc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <ActivityChart data={o.activityByDay} />
@@ -115,8 +142,8 @@ export default async function Page() {
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Message types</CardTitle>
-            <CardDescription>Top types in your index</CardDescription>
+            <CardTitle>{tr("overview.msgTypes")}</CardTitle>
+            <CardDescription>{tr("overview.msgTypesDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <MsgTypeList rows={o.msgTypes} />
@@ -126,15 +153,15 @@ export default async function Page() {
 
       {/* Surprises is the slowest panel — split into its own Suspense so
           the rest of the page streams in immediately. */}
-      <Suspense fallback={<SurprisesSkeleton />}>
-        <SurprisesPanel />
+      <Suspense fallback={<SurprisesSkeleton locale={locale} />}>
+        <SurprisesPanel locale={locale} />
       </Suspense>
 
       <section className="grid gap-6">
         <Card>
           <CardHeader>
-            <CardTitle>Top link sources</CardTitle>
-            <CardDescription>Most shared domain groups across all chats</CardDescription>
+            <CardTitle>{tr("overview.topLinks")}</CardTitle>
+            <CardDescription>{tr("overview.topLinksDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <TopDomainsBar rows={o.topDomains} />
@@ -145,19 +172,18 @@ export default async function Page() {
   );
 }
 
-async function SurprisesPanel() {
+async function SurprisesPanel({ locale }: { locale: Locale }) {
   const surprises = getSurprises();
   if (surprises.length === 0) return null;
+  const tr = (k: TKey) => t(k, locale);
   return (
     <section>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Sparkles className="size-4 text-primary" /> Surprises
+            <Sparkles className="size-4 text-primary" /> {tr("overview.surprises")}
           </CardTitle>
-          <CardDescription>
-            Anomalies and patterns in the last few weeks, vs your usual baseline.
-          </CardDescription>
+          <CardDescription>{tr("overview.surprisesDesc")}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -189,15 +215,16 @@ async function SurprisesPanel() {
   );
 }
 
-function SurprisesSkeleton() {
+function SurprisesSkeleton({ locale }: { locale: Locale }) {
+  const tr = (k: TKey) => t(k, locale);
   return (
     <section>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Sparkles className="size-4 text-primary" /> Surprises
+            <Sparkles className="size-4 text-primary" /> {tr("overview.surprises")}
           </CardTitle>
-          <CardDescription>Loading anomalies…</CardDescription>
+          <CardDescription>{locale === "zh" ? "正在加载…" : "Loading anomalies…"}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -208,6 +235,28 @@ function SurprisesSkeleton() {
         </CardContent>
       </Card>
     </section>
+  );
+}
+
+function PeriodDelta({ current, prior }: { current: number; prior: number }) {
+  // Last 30d vs the preceding 30d, expressed as a percent change. Used on
+  // Overview's "Indexed messages" StatCard.
+  const pct = prior > 0 ? ((current - prior) / prior) * 100 : 0;
+  const arrow = pct > 0.5 ? "↑" : pct < -0.5 ? "↓" : "·";
+  const tone =
+    pct > 0.5
+      ? "text-emerald-600 dark:text-emerald-400"
+      : pct < -0.5
+        ? "text-rose-600 dark:text-rose-400"
+        : "text-muted-foreground";
+  return (
+    <span className={`${tone} tabular-nums inline-flex items-center gap-0.5 text-[10px]`} title="vs the 30 days before that">
+      <span aria-hidden>{arrow}</span>
+      <span>
+        {pct > 0 ? "+" : ""}
+        {pct.toFixed(0)}%
+      </span>
+    </span>
   );
 }
 
