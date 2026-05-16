@@ -420,31 +420,17 @@ export function getLinkGroupFacets(group: string): { senders: { sender: string; 
 
 export function searchMessages(q: string, opts: { limit?: number; type?: string; chat?: string } = {}) {
   const db = getDb();
-  if (!q.trim()) return [];
-  const conditions: string[] = [];
-  const params: (string | number)[] = [];
-  if (opts.type) {
-    conditions.push("m.msg_type = ?");
-    params.push(opts.type);
-  }
-  if (opts.chat) {
-    conditions.push("m.chat_display = ?");
-    params.push(opts.chat);
-  }
-  const where = conditions.length ? ` AND ${conditions.join(" AND ")}` : "";
-  params.unshift(q);
-  params.push(opts.limit ?? 100);
-  return db.prepare(`
-    SELECT m.id, m.chat_username, m.chat_display, m.sender, m.msg_type, m.content, m.timestamp,
-           snippet(messages_fts, 0, '<mark>', '</mark>', '…', 12) AS snippet
-    FROM messages_fts
-    JOIN messages m ON m.id = messages_fts.rowid
-    WHERE messages_fts MATCH ?
-      AND m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
-      ${where}
-    ORDER BY m.timestamp DESC
-    LIMIT ?
-  `).all(...params) as {
+  const trimmed = q.trim();
+  if (!trimmed) return [];
+
+  const limit = opts.limit ?? 100;
+  const typeFilter = opts.type ? " AND m.msg_type = ?" : "";
+  const chatFilter = opts.chat ? " AND m.chat_display = ?" : "";
+  const extraParams: (string | number)[] = [];
+  if (opts.type) extraParams.push(opts.type);
+  if (opts.chat) extraParams.push(opts.chat);
+
+  type Row = {
     id: number;
     chat_username: string | null;
     chat_display: string;
@@ -453,7 +439,66 @@ export function searchMessages(q: string, opts: { limit?: number; type?: string;
     content: string;
     timestamp: number;
     snippet: string;
-  }[];
+  };
+
+  // Strip any wrapping double-quotes a caller added for FTS phrase syntax,
+  // so the length check sees the actual user input.
+  const bare =
+    trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')
+      ? trimmed.slice(1, -1).replace(/""/g, '"')
+      : trimmed;
+
+  // SQLite FTS5's trigram tokenizer needs >= 3 characters per token, so any
+  // query shorter than 3 chars (very common for CJK) returns 0 matches.
+  // Fall back to plain LIKE in that case. Slower (full scan) but correct.
+  if (bare.length < 3) {
+    const like = `%${bare.replace(/[\\%_]/g, (c) => "\\" + c)}%`;
+    const rows = db
+      .prepare(
+        `SELECT m.id, m.chat_username, m.chat_display, m.sender, m.msg_type, m.content, m.timestamp
+         FROM messages m
+         WHERE m.content LIKE ? ESCAPE '\\'
+           AND m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
+           ${typeFilter}${chatFilter}
+         ORDER BY m.timestamp DESC
+         LIMIT ?`,
+      )
+      .all(like, ...extraParams, limit) as Omit<Row, "snippet">[];
+    // Build a basic snippet ourselves: highlight the first occurrence.
+    return rows.map<Row>((r) => {
+      const idx = r.content.toLowerCase().indexOf(bare.toLowerCase());
+      const lead = Math.max(0, idx - 24);
+      const tail = Math.min(r.content.length, idx + bare.length + 24);
+      const before = (lead > 0 ? "…" : "") + escapeHtml(r.content.slice(lead, idx));
+      const match = `<mark>${escapeHtml(r.content.slice(idx, idx + bare.length))}</mark>`;
+      const after = escapeHtml(r.content.slice(idx + bare.length, tail)) + (tail < r.content.length ? "…" : "");
+      return { ...r, snippet: idx >= 0 ? before + match + after : escapeHtml(r.content.slice(0, 80)) };
+    });
+  }
+
+  const params: (string | number)[] = [trimmed, ...extraParams, limit];
+  return db
+    .prepare(
+      `SELECT m.id, m.chat_username, m.chat_display, m.sender, m.msg_type, m.content, m.timestamp,
+              snippet(messages_fts, 0, '<mark>', '</mark>', '…', 12) AS snippet
+       FROM messages_fts
+       JOIN messages m ON m.id = messages_fts.rowid
+       WHERE messages_fts MATCH ?
+         AND m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
+         ${typeFilter}${chatFilter}
+       ORDER BY m.timestamp DESC
+       LIMIT ?`,
+    )
+    .all(...params) as Row[];
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 export function getHeatmap(year: number): { day: string; n: number }[] {
