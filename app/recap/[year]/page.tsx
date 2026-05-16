@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Download, Sparkles, Calendar, ExternalLink } from "lucide-react";
-import { getYearRecap, getRecapYears } from "@/lib/recap";
+import { getYearRecap, getRecapYears, getYearBaseline } from "@/lib/recap";
 import { formatLatency } from "@/lib/latency";
 import { MonthlyBars } from "@/components/charts/recap/monthly-bars";
 import { HourlyGrid } from "@/components/charts/recap/hourly-grid";
@@ -56,6 +56,8 @@ export default async function RecapPage({
   if (!Number.isFinite(year) || year < 2000 || year > 2100) return notFound();
   const recap = getYearRecap(year, null);
   const knownYears = getRecapYears();
+  const prevYear = knownYears.find((y) => y < year) ?? null;
+  const prevBaseline = prevYear ? getYearBaseline(prevYear, null) : null;
 
   return (
     <div className="mx-auto w-full max-w-6xl px-6 py-8 space-y-10">
@@ -131,6 +133,33 @@ export default async function RecapPage({
               sub={`Longest active streak ${recap.totals.longestStreak}d`}
             />
           </section>
+
+          {/* Year-over-year diff — only when both years have reasonably full coverage */}
+          {prevBaseline && prevBaseline.totalMessages > 0 && (
+            <section className="rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+              <p className="text-xs uppercase tracking-widest text-muted-foreground mb-2">
+                vs {prevBaseline.year}
+                {prevBaseline.totalMessages < 30_000 && (
+                  <span className="ml-2 text-amber-700 dark:text-amber-400 normal-case tracking-normal">
+                    {prevBaseline.year} only has {fmtNum(prevBaseline.totalMessages)} indexed messages — deltas
+                    likely reflect coverage, not behavior.
+                  </span>
+                )}
+              </p>
+              <div className="grid gap-x-6 gap-y-2 grid-cols-2 sm:grid-cols-4 text-sm">
+                <Delta label="messages" current={recap.totals.messages} previous={prevBaseline.totalMessages} />
+                <Delta label="links" current={recap.totals.links} previous={prevBaseline.totalLinks} />
+                <Delta label="chats" current={recap.totals.chats} previous={prevBaseline.totalChats} />
+                <Delta label="active days" current={recap.totals.days} previous={prevBaseline.totalDays} />
+              </div>
+              {prevBaseline.topContact && recap.topContacts[0] && prevBaseline.topContact !== recap.topContacts[0].display_name && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  Top contact shifted from <span className="font-medium text-foreground">{prevBaseline.topContact}</span>
+                  {" "}→ <span className="font-medium text-foreground">{recap.topContacts[0].display_name}</span>.
+                </p>
+              )}
+            </section>
+          )}
 
           {/* Monthly */}
           <Section
@@ -388,6 +417,38 @@ export default async function RecapPage({
           </p>
         </>
       )}
+    </div>
+  );
+}
+
+function Delta({
+  label,
+  current,
+  previous,
+}: {
+  label: string;
+  current: number;
+  previous: number;
+}) {
+  const diff = current - previous;
+  const pct = previous > 0 ? (diff / previous) * 100 : null;
+  const arrow = diff > 0 ? "↑" : diff < 0 ? "↓" : "→";
+  const tone =
+    diff > 0
+      ? "text-emerald-600 dark:text-emerald-400"
+      : diff < 0
+        ? "text-rose-600 dark:text-rose-400"
+        : "text-muted-foreground";
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground capitalize">{label}</p>
+      <p className="text-base font-medium tabular-nums">{fmtNum(current)}</p>
+      <p className={`text-xs tabular-nums ${tone}`}>
+        {arrow} {fmtNum(Math.abs(diff))}
+        {pct !== null && (
+          <span className="text-muted-foreground"> ({Math.abs(pct).toFixed(0)}%)</span>
+        )}
+      </p>
     </div>
   );
 }

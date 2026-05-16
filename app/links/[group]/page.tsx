@@ -3,7 +3,7 @@ import { getLinksInGroup, getLinkGroupFacets } from "@/lib/queries";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import { ArrowLeft, ExternalLink, Download } from "lucide-react";
 import { format } from "date-fns";
 
 export const dynamic = "force-dynamic";
@@ -40,12 +40,28 @@ export default async function LinksGroupPage({
         <ArrowLeft className="size-3.5 mr-1" /> Back to all groups
       </Link>
 
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">{decoded}</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          {items.length.toLocaleString()} links shown
-          {(sp.sender || sp.chat || sp.q) && " (filtered)"}
-        </p>
+      <header className="flex items-end justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{decoded}</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {items.length.toLocaleString()} links shown
+            {(sp.sender || sp.chat || sp.q) && " (filtered)"}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <a
+            href={`/api/export/links?group=${encodeURIComponent(decoded)}&format=csv`}
+            className="inline-flex items-center gap-1 rounded-md border border-border/60 px-3 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent"
+          >
+            <Download className="size-3.5" /> CSV
+          </a>
+          <a
+            href={`/api/export/links?group=${encodeURIComponent(decoded)}&format=json`}
+            className="inline-flex items-center gap-1 rounded-md border border-border/60 px-3 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent"
+          >
+            <Download className="size-3.5" /> JSON
+          </a>
+        </div>
       </header>
 
       {(sp.sender || sp.chat || sp.q) && (

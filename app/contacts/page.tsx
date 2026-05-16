@@ -11,7 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDistanceToNow } from "date-fns";
-import { Users, MessageSquare, LinkIcon, Building, Folder } from "lucide-react";
+import { Users, MessageSquare, LinkIcon, Building, Folder, Download } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -51,12 +51,30 @@ export default async function ContactsPage({
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-6">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Contacts</h1>
-        <p className="text-sm text-muted-foreground">
-          {rows.length.toLocaleString()} sessions matching current filters
-          {view === "archived" && " · viewing archived"}
-        </p>
+      <header className="flex items-end justify-between gap-3 flex-wrap">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight">Contacts</h1>
+          <p className="text-sm text-muted-foreground">
+            {rows.length.toLocaleString()} sessions matching current filters
+            {view === "archived" && " · viewing archived"}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <a
+            href="/api/export/sessions?format=csv"
+            className="inline-flex items-center gap-1 rounded-md border border-border/60 px-3 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent"
+            title="Download sessions as CSV"
+          >
+            <Download className="size-3.5" /> CSV
+          </a>
+          <a
+            href="/api/export/sessions?format=json"
+            className="inline-flex items-center gap-1 rounded-md border border-border/60 px-3 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent"
+            title="Download sessions as JSON"
+          >
+            <Download className="size-3.5" /> JSON
+          </a>
+        </div>
       </header>
 
       <div className="flex flex-wrap items-center gap-3 justify-between">

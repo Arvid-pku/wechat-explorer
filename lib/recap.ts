@@ -790,6 +790,75 @@ function computeStreaks(
 }
 
 /**
+ * Lightweight previous-year baseline — just totals + monthly counts +
+ * topContacts so the recap page can paint a "vs last year" delta strip
+ * without paying for the full recap a second time.
+ */
+export interface YearBaseline {
+  year: number;
+  totalMessages: number;
+  totalLinks: number;
+  totalChats: number;
+  totalDays: number;
+  topContact: string | null;
+}
+
+export function getYearBaseline(
+  year: number,
+  chatUsername: string | null = null,
+): YearBaseline {
+  const db = getDb();
+  const scope = buildScope(year, chatUsername);
+  const totals = db
+    .prepare(
+      `SELECT COUNT(*) AS n,
+              COUNT(DISTINCT chat_username) AS chats,
+              COUNT(DISTINCT strftime('%Y-%m-%d', timestamp, 'unixepoch', 'localtime')) AS days
+       FROM messages
+       WHERE timestamp >= ? AND timestamp < ?
+         AND ${scope.exclusionClause}`,
+    )
+    .get(scope.yearStart, scope.yearEnd, ...scopedParams(scope)) as {
+    n: number;
+    chats: number;
+    days: number;
+  };
+  const links = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM urls
+       WHERE timestamp >= ? AND timestamp < ?
+         AND ${chatUsername ? "chat_username = ?" : `chat_username NOT IN ${EXCLUDED_SUBQUERY}`}`,
+    )
+    .get(scope.yearStart, scope.yearEnd, ...scopedParams(scope)) as { n: number };
+
+  let topContact: string | null = null;
+  if (!chatUsername) {
+    const r = db
+      .prepare(
+        `SELECT s.display_name FROM messages m
+         JOIN sessions s ON s.username = m.chat_username
+         WHERE m.timestamp >= ? AND m.timestamp < ?
+           AND m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
+           AND s.chat_type = 'private'
+         GROUP BY s.username
+         ORDER BY COUNT(*) DESC
+         LIMIT 1`,
+      )
+      .get(scope.yearStart, scope.yearEnd) as { display_name: string } | undefined;
+    topContact = r?.display_name ?? null;
+  }
+
+  return {
+    year,
+    totalMessages: totals.n,
+    totalLinks: links.n,
+    totalChats: totals.chats,
+    totalDays: totals.days,
+    topContact,
+  };
+}
+
+/**
  * List the years that have at least 1 message after exclusion.
  * Cached on first call within a process.
  */
