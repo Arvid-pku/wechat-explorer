@@ -1,6 +1,15 @@
 "use client";
 
-import { ResponsiveContainer, AreaChart, Area, Tooltip, XAxis, YAxis, CartesianGrid } from "recharts";
+import {
+  ResponsiveContainer,
+  ComposedChart,
+  Area,
+  Line,
+  Tooltip,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+} from "recharts";
 import { format, parseISO } from "date-fns";
 
 interface Props {
@@ -9,14 +18,15 @@ interface Props {
 
 export function ActivityChart({ data }: Props) {
   const filled = fillGaps(data);
+  const smoothed = withRolling(filled, 7);
   return (
     <div className="h-[220px] min-h-[220px] w-full">
       <ResponsiveContainer width="100%" height={220} minWidth={0}>
-        <AreaChart data={filled} margin={{ top: 6, right: 6, left: 0, bottom: 0 }}>
+        <ComposedChart data={smoothed} margin={{ top: 6, right: 6, left: 0, bottom: 0 }}>
           <defs>
             <linearGradient id="actGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="var(--color-primary)" stopOpacity={0.4} />
-              <stop offset="95%" stopColor="var(--color-primary)" stopOpacity={0} />
+              <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.5} />
+              <stop offset="100%" stopColor="var(--color-primary)" stopOpacity={0.05} />
             </linearGradient>
           </defs>
           <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
@@ -43,16 +53,27 @@ export function ActivityChart({ data }: Props) {
               color: "var(--color-foreground)",
             }}
             labelFormatter={(v) => format(parseISO(String(v)), "EEE, MMM d, yyyy")}
-            formatter={(v) => [v, "messages"]}
+            formatter={(v, name) => [Math.round(Number(v)).toLocaleString(), name === "rolling" ? "7-day avg" : "messages"]}
           />
           <Area
             type="monotone"
             dataKey="n"
             stroke="var(--color-primary)"
-            strokeWidth={1.5}
+            strokeWidth={1}
+            strokeOpacity={0.55}
             fill="url(#actGrad)"
+            isAnimationActive={false}
           />
-        </AreaChart>
+          <Line
+            type="monotone"
+            dataKey="rolling"
+            stroke="var(--color-primary)"
+            strokeWidth={2.2}
+            strokeOpacity={0.95}
+            dot={false}
+            isAnimationActive={false}
+          />
+        </ComposedChart>
       </ResponsiveContainer>
     </div>
   );
@@ -69,6 +90,18 @@ function fillGaps(rows: { day: string; n: number }[]): { day: string; n: number 
     const key = cur.toISOString().slice(0, 10);
     out.push({ day: key, n: map.get(key) ?? 0 });
     cur.setDate(cur.getDate() + 1);
+  }
+  return out;
+}
+
+function withRolling(rows: { day: string; n: number }[], window: number) {
+  const out: { day: string; n: number; rolling: number }[] = [];
+  let sum = 0;
+  for (let i = 0; i < rows.length; i++) {
+    sum += rows[i].n;
+    if (i >= window) sum -= rows[i - window].n;
+    const denom = Math.min(window, i + 1);
+    out.push({ ...rows[i], rolling: sum / denom });
   }
   return out;
 }

@@ -11,7 +11,7 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command";
-import { BarChart3, Users, LinkIcon, Search, CalendarDays, BookOpen, Network, Settings } from "lucide-react";
+import { BarChart3, Users, LinkIcon, Search, CalendarDays, BookOpen, Network, Settings, Sparkles } from "lucide-react";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -88,6 +88,10 @@ export function CommandPalette({ open, setOpen }: CommandPaletteProps) {
           <CommandItem onSelect={() => go("/graph")}>
             <Network className="mr-2 size-4" />
             Graph
+          </CommandItem>
+          <CommandItem onSelect={() => go(`/recap/${new Date().getFullYear()}`)}>
+            <Sparkles className="mr-2 size-4" />
+            Year in Review
           </CommandItem>
           <CommandItem onSelect={() => go("/settings")}>
             <Settings className="mr-2 size-4" />

@@ -1,7 +1,10 @@
+import Link from "next/link";
 import { getOverview } from "@/lib/queries";
+import { getRecapYears } from "@/lib/recap";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatDistanceToNow } from "date-fns";
+import { Sparkles } from "lucide-react";
 import { ActivityChart } from "@/components/charts/activity-chart";
 import { TopDomainsBar } from "@/components/charts/top-domains-bar";
 import { MsgTypeList } from "@/components/charts/msg-type-list";
@@ -15,6 +18,8 @@ function fmtNum(n: number) {
 export default async function Page() {
   const o = getOverview();
   const lastIndexed = o.lastIndexedAt ? new Date(Number(o.lastIndexedAt)) : null;
+  const years = getRecapYears();
+  const latestYear = years[0] ?? null;
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-8">
@@ -27,6 +32,26 @@ export default async function Page() {
               : "Index has not been built yet"}
           </p>
         </div>
+        {latestYear && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <Link
+              href={`/recap/${latestYear}`}
+              className="inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-3 py-1.5 text-sm font-medium hover:opacity-90"
+            >
+              <Sparkles className="size-3.5" />
+              {latestYear} in Review
+            </Link>
+            {years.slice(1, 4).map((y) => (
+              <Link
+                key={y}
+                href={`/recap/${y}`}
+                className="rounded-md border border-border/60 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent"
+              >
+                {y}
+              </Link>
+            ))}
+          </div>
+        )}
       </header>
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
