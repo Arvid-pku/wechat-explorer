@@ -6,7 +6,12 @@
  */
 
 import { getDb } from "./db";
-import { EXCLUDED_SUBQUERY, excludedSubquery, getMeHandles } from "./queries";
+import {
+  EXCLUDED_SUBQUERY,
+  ensureDailyCountsFresh,
+  excludedSubquery,
+  getMeHandles,
+} from "./queries";
 import { getCachedJSON } from "./cache";
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -143,20 +148,25 @@ export function getMessagesStats(): MessagesStats {
 }
 
 function computeMessagesStats(): MessagesStats {
+  ensureDailyCountsFresh();
   const db = getDb();
   const meHandles = getMeHandles();
   const meIn = meHandles.length ? `IN (${meHandles.map(() => "?").join(",")})` : `IN ('')`;
   const excl = EXCLUDED_SUBQUERY;
 
+  // Totals come from `daily_counts` (cheap rollup) instead of scanning all
+  // 1M+ messages. `daily_counts.n` / `.mine` already respect the exclusion
+  // clause and the current me-handles list.
   const totalsRow = db
     .prepare(
-      `SELECT COUNT(*) AS total,
-              SUM(CASE WHEN sender ${meIn} THEN 1 ELSE 0 END) AS mine
-       FROM messages
-       WHERE (chat_username IS NULL OR chat_username NOT IN ${excl})`,
+      `SELECT COALESCE(SUM(n), 0) AS total,
+              COALESCE(SUM(mine), 0) AS mine
+       FROM daily_counts`,
     )
-    .get(...meHandles) as { total: number; mine: number };
+    .get() as { total: number; mine: number };
 
+  // The "excluded" total (official + folded + archived) still needs a scan —
+  // we don't keep a rollup of it. Bounded by index on chat_username.
   const excludedFromCount = (db
     .prepare(
       `SELECT COUNT(*) AS n FROM messages
@@ -164,6 +174,8 @@ function computeMessagesStats(): MessagesStats {
     )
     .get() as { n: number }).n;
 
+  // byMsgType genuinely needs `messages` (msg_type column isn't in any rollup).
+  // The query uses `idx_messages_type` so it's already a fast index walk.
   const byMsgType = db
     .prepare(
       `SELECT msg_type,
@@ -177,26 +189,27 @@ function computeMessagesStats(): MessagesStats {
     )
     .all(...meHandles) as { msg_type: string; n: number; mine: number }[];
 
+  // byMonth + byDow off the rollup. ~600 rows × tiny strftime: < 50ms cold,
+  // replaces the previous full table scan that was the main cause of the 15s
+  // cold load on /stats/messages.
   const monthRaw = db
     .prepare(
-      `SELECT strftime('%Y-%m', timestamp, 'unixepoch', 'localtime') AS ym,
-              COUNT(*) AS total,
-              SUM(CASE WHEN sender ${meIn} THEN 1 ELSE 0 END) AS mine
-       FROM messages
-       WHERE (chat_username IS NULL OR chat_username NOT IN ${excl})
+      `SELECT substr(day, 1, 7) AS ym,
+              COALESCE(SUM(n), 0) AS total,
+              COALESCE(SUM(mine), 0) AS mine
+       FROM daily_counts
        GROUP BY ym
        ORDER BY ym`,
     )
-    .all(...meHandles) as { ym: string; total: number; mine: number }[];
+    .all() as { ym: string; total: number; mine: number }[];
   const byMonth = monthRaw.map((r) => ({ ...r, theirs: r.total - r.mine }));
 
   const dowLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const dowRaw = db
     .prepare(
-      `SELECT CAST(strftime('%w', timestamp, 'unixepoch', 'localtime') AS INTEGER) AS dow,
-              COUNT(*) AS n
-       FROM messages
-       WHERE (chat_username IS NULL OR chat_username NOT IN ${excl})
+      `SELECT CAST(strftime('%w', day) AS INTEGER) AS dow,
+              COALESCE(SUM(n), 0) AS n
+       FROM daily_counts
        GROUP BY dow
        ORDER BY dow`,
     )
@@ -206,6 +219,9 @@ function computeMessagesStats(): MessagesStats {
     return { dow: i, label: dowLabels[i], n: r?.n ?? 0 };
   });
 
+  // byHour can't be served from `daily_counts` (no hour granularity). Still
+  // scans `messages` but the planner picks `idx_messages_chat` as a covering
+  // index for the chat_username filter, so it's ~1s on 1M rows.
   const hourRaw = db
     .prepare(
       `SELECT CAST(strftime('%H', timestamp, 'unixepoch', 'localtime') AS INTEGER) AS hour,
