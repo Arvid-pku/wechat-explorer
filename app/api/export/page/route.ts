@@ -41,7 +41,14 @@ export async function GET(req: Request) {
   let pageHtml: string;
   try {
     const res = await fetch(target, {
-      headers: { cookie: cookieHeader, accept: "text/html" },
+      headers: {
+        cookie: cookieHeader,
+        accept: "text/html",
+        // Picked up by app/layout.tsx → ExportModeProvider so client chart
+        // wrappers swap their ResponsiveContainer for a fixed-pixel SVG
+        // and the export actually contains chart pixels.
+        "x-export-mode": "1",
+      },
       cache: "no-store",
     });
     if (!res.ok) {

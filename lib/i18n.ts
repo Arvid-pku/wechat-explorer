@@ -173,8 +173,8 @@ const DICT = {
     zh: "由 WeChat Explorer 导出",
   },
   "export.note": {
-    en: "Interactive charts may render blank; lists, tables, and pre-rendered SVG come through intact. For the highest-fidelity year recap, use the page's own \"Export HTML\" button on /recap/<year>.",
-    zh: "交互式图表可能为空；列表、表格和预渲染 SVG 都会保留完整。如需高保真度的年度回顾导出，请使用 /recap/<year> 页面自带的 \"Export HTML\" 按钮。",
+    en: "Charts are pre-rendered as inline SVG — open the file anywhere, no JavaScript needed. The page's own data and time of export are baked in.",
+    zh: "图表已预渲染为内联 SVG，无需 JavaScript 即可打开。页面数据与导出时间已固化在文件中。",
   },
 
   // Settings

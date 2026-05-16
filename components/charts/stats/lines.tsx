@@ -13,6 +13,8 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
+import { EXPORT_CHART_WIDTH, useExportMode } from "@/components/export-mode";
+import { ServerLines } from "@/lib/server-charts";
 import { PALETTE, TOOLTIP_STYLE, fmt } from "./_shared";
 
 interface TimeSeriesDatum {
@@ -20,6 +22,10 @@ interface TimeSeriesDatum {
   a: number;
   b?: number;
 }
+
+// Shared margin for every time-series chart in this file. Pulled out so the
+// export branch + the responsive branch can both reuse it.
+const TS_MARGIN = { top: 8, right: 12, left: 0, bottom: 4 };
 
 export function StackedArea({
   data,
@@ -30,56 +36,76 @@ export function StackedArea({
   height?: number;
   seriesLabels?: [string, string];
 }) {
+  const isExport = useExportMode();
   if (!data || data.length === 0)
     return <p className="text-sm text-muted-foreground">No data.</p>;
+  const body = (
+    <>
+      <defs>
+        <linearGradient id="sa-a" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="5%" stopColor="var(--color-primary)" stopOpacity={0.6} />
+          <stop offset="95%" stopColor="var(--color-primary)" stopOpacity={0.05} />
+        </linearGradient>
+        <linearGradient id="sa-b" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="5%" stopColor="var(--color-muted-foreground)" stopOpacity={0.45} />
+          <stop offset="95%" stopColor="var(--color-muted-foreground)" stopOpacity={0.05} />
+        </linearGradient>
+      </defs>
+      <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
+      <XAxis
+        dataKey="label"
+        tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
+        axisLine={false}
+        tickLine={false}
+        minTickGap={36}
+      />
+      <YAxis
+        tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
+        axisLine={false}
+        tickLine={false}
+        width={36}
+      />
+      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => fmt(v)} />
+      <Legend verticalAlign="top" iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+      <Area
+        type="monotone"
+        dataKey="a"
+        name={seriesLabels[0]}
+        stroke="var(--color-primary)"
+        fill="url(#sa-a)"
+        stackId="1"
+        isAnimationActive={false}
+      />
+      <Area
+        type="monotone"
+        dataKey="b"
+        name={seriesLabels[1]}
+        stroke="var(--color-muted-foreground)"
+        fill="url(#sa-b)"
+        stackId="1"
+        isAnimationActive={false}
+      />
+    </>
+  );
+  if (isExport) {
+    return (
+      <div style={{ width: EXPORT_CHART_WIDTH, height, margin: "0 auto" }}>
+        <ServerLines
+          data={data.map((d) => ({ label: d.label, values: [d.a, d.b ?? 0] }))}
+          series={[
+            { label: seriesLabels[0] },
+            { label: seriesLabels[1], color: "var(--color-muted-foreground)" },
+          ]}
+          fill
+          width={EXPORT_CHART_WIDTH}
+          height={height}
+        />
+      </div>
+    );
+  }
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <AreaChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
-        <defs>
-          <linearGradient id="sa-a" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor="var(--color-primary)" stopOpacity={0.6} />
-            <stop offset="95%" stopColor="var(--color-primary)" stopOpacity={0.05} />
-          </linearGradient>
-          <linearGradient id="sa-b" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor="var(--color-muted-foreground)" stopOpacity={0.45} />
-            <stop offset="95%" stopColor="var(--color-muted-foreground)" stopOpacity={0.05} />
-          </linearGradient>
-        </defs>
-        <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
-        <XAxis
-          dataKey="label"
-          tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
-          axisLine={false}
-          tickLine={false}
-          minTickGap={36}
-        />
-        <YAxis
-          tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
-          axisLine={false}
-          tickLine={false}
-          width={36}
-        />
-        <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => fmt(v)} />
-        <Legend verticalAlign="top" iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
-        <Area
-          type="monotone"
-          dataKey="a"
-          name={seriesLabels[0]}
-          stroke="var(--color-primary)"
-          fill="url(#sa-a)"
-          stackId="1"
-          isAnimationActive={false}
-        />
-        <Area
-          type="monotone"
-          dataKey="b"
-          name={seriesLabels[1]}
-          stroke="var(--color-muted-foreground)"
-          fill="url(#sa-b)"
-          stackId="1"
-          isAnimationActive={false}
-        />
-      </AreaChart>
+      <AreaChart data={data} margin={TS_MARGIN}>{body}</AreaChart>
     </ResponsiveContainer>
   );
 }
@@ -93,46 +119,65 @@ export function TwoSeriesLine({
   height?: number;
   seriesLabels?: [string, string];
 }) {
+  const isExport = useExportMode();
   if (!data || data.length === 0)
     return <p className="text-sm text-muted-foreground">No data.</p>;
+  const body = (
+    <>
+      <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
+      <XAxis
+        dataKey="label"
+        tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
+        axisLine={false}
+        tickLine={false}
+        minTickGap={36}
+      />
+      <YAxis
+        tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
+        axisLine={false}
+        tickLine={false}
+        width={36}
+      />
+      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => fmt(v)} />
+      <Legend verticalAlign="top" iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+      <Line
+        type="monotone"
+        dataKey="a"
+        name={seriesLabels[0]}
+        stroke="var(--color-primary)"
+        strokeWidth={2}
+        dot={false}
+        isAnimationActive={false}
+      />
+      <Line
+        type="monotone"
+        dataKey="b"
+        name={seriesLabels[1]}
+        stroke="var(--color-muted-foreground)"
+        strokeWidth={1.5}
+        dot={false}
+        isAnimationActive={false}
+      />
+    </>
+  );
+  if (isExport) {
+    return (
+      <div style={{ width: EXPORT_CHART_WIDTH, height, margin: "0 auto" }}>
+        <ServerLines
+          data={data.map((d) => ({ label: d.label, values: [d.a, d.b ?? 0] }))}
+          series={[
+            { label: seriesLabels[0], strokeWidth: 2 },
+            { label: seriesLabels[1], color: "var(--color-muted-foreground)", strokeWidth: 1.5 },
+          ]}
+          width={EXPORT_CHART_WIDTH}
+          height={height}
+        />
+      </div>
+    );
+  }
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <LineChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
-        <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
-        <XAxis
-          dataKey="label"
-          tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
-          axisLine={false}
-          tickLine={false}
-          minTickGap={36}
-        />
-        <YAxis
-          tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
-          axisLine={false}
-          tickLine={false}
-          width={36}
-        />
-        <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => fmt(v)} />
-        <Legend verticalAlign="top" iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
-        <Line
-          type="monotone"
-          dataKey="a"
-          name={seriesLabels[0]}
-          stroke="var(--color-primary)"
-          strokeWidth={2}
-          dot={false}
-          isAnimationActive={false}
-        />
-        <Line
-          type="monotone"
-          dataKey="b"
-          name={seriesLabels[1]}
-          stroke="var(--color-muted-foreground)"
-          strokeWidth={1.5}
-          dot={false}
-          isAnimationActive={false}
-        />
-      </LineChart>
+      <LineChart data={data} margin={TS_MARGIN}>{body}</LineChart>
     </ResponsiveContainer>
   );
 }
@@ -151,45 +196,64 @@ export function MultiLine({
   series: { key: string; label: string }[];
   height?: number;
 }) {
+  const isExport = useExportMode();
   if (!data || data.length === 0 || series.length === 0)
     return <p className="text-sm text-muted-foreground">No data.</p>;
+  const body = (
+    <>
+      <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
+      <XAxis
+        dataKey="label"
+        tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
+        axisLine={false}
+        tickLine={false}
+        minTickGap={36}
+      />
+      <YAxis
+        tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
+        axisLine={false}
+        tickLine={false}
+        width={36}
+      />
+      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => fmt(v)} />
+      <Legend
+        verticalAlign="top"
+        iconType="circle"
+        iconSize={8}
+        wrapperStyle={{ fontSize: 11 }}
+      />
+      {series.map((s, i) => (
+        <Line
+          key={s.key}
+          type="monotone"
+          dataKey={s.key}
+          name={s.label}
+          stroke={PALETTE[i % PALETTE.length]}
+          strokeWidth={1.8}
+          dot={false}
+          isAnimationActive={false}
+        />
+      ))}
+    </>
+  );
+  if (isExport) {
+    return (
+      <div style={{ width: EXPORT_CHART_WIDTH, height, margin: "0 auto" }}>
+        <ServerLines
+          data={data.map((row) => ({
+            label: String(row.label ?? ""),
+            values: series.map((s) => Number(row[s.key] ?? 0)),
+          }))}
+          series={series.map((s) => ({ label: s.label }))}
+          width={EXPORT_CHART_WIDTH}
+          height={height}
+        />
+      </div>
+    );
+  }
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <LineChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
-        <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
-        <XAxis
-          dataKey="label"
-          tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
-          axisLine={false}
-          tickLine={false}
-          minTickGap={36}
-        />
-        <YAxis
-          tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
-          axisLine={false}
-          tickLine={false}
-          width={36}
-        />
-        <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => fmt(v)} />
-        <Legend
-          verticalAlign="top"
-          iconType="circle"
-          iconSize={8}
-          wrapperStyle={{ fontSize: 11 }}
-        />
-        {series.map((s, i) => (
-          <Line
-            key={s.key}
-            type="monotone"
-            dataKey={s.key}
-            name={s.label}
-            stroke={PALETTE[i % PALETTE.length]}
-            strokeWidth={1.8}
-            dot={false}
-            isAnimationActive={false}
-          />
-        ))}
-      </LineChart>
+      <LineChart data={data} margin={TS_MARGIN}>{body}</LineChart>
     </ResponsiveContainer>
   );
 }

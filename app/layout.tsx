@@ -7,6 +7,8 @@ import { AppShell } from "@/components/app-shell";
 import { Toaster } from "@/components/ui/sonner";
 import { LocaleProvider } from "@/components/i18n-provider";
 import { getServerLocale } from "@/lib/i18n-server";
+import { ExportModeProvider } from "@/components/export-mode";
+import { headers } from "next/headers";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -46,6 +48,11 @@ export default async function RootLayout({
   // already uses the right dictionary — no flash of English on a Chinese
   // user's reload. The `<html lang>` attribute follows.
   const locale = await getServerLocale();
+  // `x-export-mode: 1` is set by /api/export/page when it server-fetches a
+  // page for the HTML exporter. Threads through ExportModeProvider so client
+  // chart wrappers can pick a fixed-pixel container instead of the
+  // SSR-blanking `ResponsiveContainer width="100%"`.
+  const isExport = (await headers()).get("x-export-mode") === "1";
   return (
     <html
       lang={locale === "zh" ? "zh-Hans" : "en"}
@@ -58,7 +65,9 @@ export default async function RootLayout({
         </Script>
         <Providers>
           <LocaleProvider initial={locale}>
-            <AppShell>{children}</AppShell>
+            <ExportModeProvider value={isExport}>
+              <AppShell>{children}</AppShell>
+            </ExportModeProvider>
           </LocaleProvider>
           <Toaster />
         </Providers>
