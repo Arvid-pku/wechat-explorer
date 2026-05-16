@@ -48,6 +48,13 @@ export function CommandPalette({ open, setOpen }: CommandPaletteProps) {
     <CommandDialog open={open} onOpenChange={setOpen}>
       <CommandInput placeholder="Type a command or search messages…" value={q} onValueChange={setQ} />
       <CommandList>
+        <div className="px-2 pt-1.5 pb-1 text-[10px] text-muted-foreground uppercase tracking-widest flex items-center gap-3 flex-wrap">
+          <span><kbd className="rounded border bg-muted px-1.5 py-0.5">g h</kbd> overview</span>
+          <span><kbd className="rounded border bg-muted px-1.5 py-0.5">g c</kbd> contacts</span>
+          <span><kbd className="rounded border bg-muted px-1.5 py-0.5">g k</kbd> calendar</span>
+          <span><kbd className="rounded border bg-muted px-1.5 py-0.5">g y</kbd> recap</span>
+          <span><kbd className="rounded border bg-muted px-1.5 py-0.5">j</kbd>/<kbd className="rounded border bg-muted px-1.5 py-0.5">k</kbd> nav rows</span>
+        </div>
         <CommandEmpty>
           {q.trim() ? (
             <button
