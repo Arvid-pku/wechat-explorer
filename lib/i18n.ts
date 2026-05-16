@@ -162,6 +162,21 @@ const DICT = {
   "topics.placeholder": { en: "e.g. GPT, 球, Cursor", zh: "例如：GPT、球、Cursor" },
   "topics.track": { en: "Track", zh: "追踪" },
 
+  // Export
+  "export.button": { en: "Export HTML", zh: "导出 HTML" },
+  "export.title": {
+    en: "Download this page as a standalone HTML file",
+    zh: "把当前页面导出成独立的 HTML 文件，方便分享",
+  },
+  "export.footer": {
+    en: "Exported from WeChat Explorer",
+    zh: "由 WeChat Explorer 导出",
+  },
+  "export.note": {
+    en: "Interactive charts may render blank; lists, tables, and pre-rendered SVG come through intact. For the highest-fidelity year recap, use the page's own \"Export HTML\" button on /recap/<year>.",
+    zh: "交互式图表可能为空；列表、表格和预渲染 SVG 都会保留完整。如需高保真度的年度回顾导出，请使用 /recap/<year> 页面自带的 \"Export HTML\" 按钮。",
+  },
+
   // Settings
   "settings.title": { en: "Settings", zh: "设置" },
   "settings.desc": {
