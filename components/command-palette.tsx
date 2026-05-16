@@ -11,7 +11,7 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command";
-import { BarChart3, Users, LinkIcon, Search, CalendarDays, BookOpen, Network, Settings, Sparkles, UserCircle2 } from "lucide-react";
+import { BarChart3, Users, LinkIcon, Search, CalendarDays, BookOpen, Network, Settings, Sparkles, UserCircle2, TrendingUp } from "lucide-react";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -95,6 +95,10 @@ export function CommandPalette({ open, setOpen }: CommandPaletteProps) {
           <CommandItem onSelect={() => go("/reading")}>
             <BookOpen className="mr-2 size-4" />
             Reading queue
+          </CommandItem>
+          <CommandItem onSelect={() => go("/topics")}>
+            <TrendingUp className="mr-2 size-4" />
+            Topics (track a word)
           </CommandItem>
           <CommandItem onSelect={() => go("/graph")}>
             <Network className="mr-2 size-4" />

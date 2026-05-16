@@ -93,6 +93,8 @@ export function KeyboardShortcuts({ onOpenCommand }: { onOpenCommand: () => void
               return "/settings";
             case "g":
               return "/graph";
+            case "t":
+              return "/topics";
             case "y":
               return `/recap/${new Date().getFullYear()}`;
             default:

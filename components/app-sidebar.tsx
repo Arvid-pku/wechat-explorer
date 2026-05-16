@@ -14,23 +14,29 @@ import {
   Command as CommandIcon,
   Sparkles,
   UserCircle2,
+  TrendingUp,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { useLocale } from "@/components/i18n-provider";
+import type { TKey } from "@/lib/i18n";
 
-const NAV_ITEMS = [
-  { href: "/", label: "Overview", icon: BarChart3 },
-  { href: "/me", label: "You", icon: UserCircle2 },
-  { href: "/contacts", label: "Contacts", icon: Users },
-  { href: "/links", label: "Links", icon: LinkIcon },
-  { href: "/search", label: "Search", icon: Search },
-  { href: "/calendar", label: "Calendar", icon: CalendarDays },
-  { href: "/reading", label: "Reading queue", icon: BookOpen },
-  { href: "/graph", label: "Graph", icon: Network },
+// Nav items reference a translation key (`tKey`) rather than a literal label
+// — the sidebar resolves them on render via `useLocale`.
+const NAV_ITEMS: { href: string; tKey: TKey; icon: typeof BarChart3 }[] = [
+  { href: "/", tKey: "nav.overview", icon: BarChart3 },
+  { href: "/me", tKey: "nav.you", icon: UserCircle2 },
+  { href: "/contacts", tKey: "nav.contacts", icon: Users },
+  { href: "/links", tKey: "nav.links", icon: LinkIcon },
+  { href: "/search", tKey: "nav.search", icon: Search },
+  { href: "/calendar", tKey: "nav.calendar", icon: CalendarDays },
+  { href: "/reading", tKey: "nav.reading", icon: BookOpen },
+  { href: "/topics", tKey: "nav.topics", icon: TrendingUp },
+  { href: "/graph", tKey: "nav.graph", icon: Network },
 ];
 
-const FOOTER_ITEMS = [
-  { href: "/settings", label: "Settings", icon: Settings },
+const FOOTER_ITEMS: { href: string; tKey: TKey; icon: typeof Settings }[] = [
+  { href: "/settings", tKey: "nav.settings", icon: Settings },
 ];
 
 interface AppSidebarProps {
@@ -39,6 +45,7 @@ interface AppSidebarProps {
 
 export function AppSidebar({ onOpenCommand }: AppSidebarProps) {
   const pathname = usePathname();
+  const { t, locale } = useLocale();
   return (
     <aside className="hidden md:flex md:w-60 lg:w-64 shrink-0 flex-col border-r border-border/60 bg-sidebar text-sidebar-foreground">
       <div className="flex h-14 items-center gap-2 border-b border-border/60 px-4 font-semibold">
@@ -54,7 +61,7 @@ export function AppSidebar({ onOpenCommand }: AppSidebarProps) {
       >
         <span className="flex items-center gap-2">
           <Search className="size-3.5" />
-          <span>Quick search…</span>
+          <span>{locale === "zh" ? "快速搜索…" : "Quick search…"}</span>
         </span>
         <kbd className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
           ⌘K
@@ -78,7 +85,7 @@ export function AppSidebar({ onOpenCommand }: AppSidebarProps) {
                   )}
                 >
                   <Icon className="size-4" />
-                  <span>{item.label}</span>
+                  <span>{t(item.tKey)}</span>
                 </Link>
               </li>
             );
@@ -103,7 +110,7 @@ export function AppSidebar({ onOpenCommand }: AppSidebarProps) {
                   )}
                 >
                   <Icon className="size-4" />
-                  <span>{item.label}</span>
+                  <span>{t(item.tKey)}</span>
                 </Link>
               </li>
             );
