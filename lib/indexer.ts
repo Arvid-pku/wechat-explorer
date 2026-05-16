@@ -9,7 +9,23 @@ import {
   type RawMessage,
 } from "./wx";
 import { extractUrls, toExtracted } from "./url-parser";
-import { backfillChatUsernames } from "./queries";
+import { backfillChatUsernames, refreshDailyCounts } from "./queries";
+import { invalidateRecapCache } from "./recap";
+import { invalidateCalendarCaches } from "./queries.calendar";
+import { invalidateContactBaseline } from "./queries.contact";
+import { bumpIndexEpoch } from "./cache";
+
+/**
+ * Drop every in-process cache + bump the persistent cache's index epoch so
+ * cross-process / cross-restart cached rows in `query_cache` are also
+ * invalidated. Called at the end of every indexing run.
+ */
+function invalidateAllCaches() {
+  invalidateRecapCache();
+  invalidateCalendarCaches();
+  invalidateContactBaseline();
+  bumpIndexEpoch();
+}
 
 export interface IndexerProgress {
   stage: string;
@@ -21,12 +37,26 @@ export interface IndexerProgress {
 export type ProgressCb = (p: IndexerProgress) => void;
 
 const HISTORY_BATCH_LIMIT = 1000;
-const HISTORY_PAGES_PER_CHAT = 10;
+// 50 pages × 1000 msgs = 50k per chat per single run. Most heavy WeChat chats
+// fit; extremely long-running 1:1 chats (10+ years) may still exceed, and the
+// incremental `--until` path below extends backward across reruns.
+const HISTORY_PAGES_PER_CHAT = 50;
+
+/** Format a unix epoch (seconds) as YYYY-MM-DD for the wx CLI's date flags. */
+function unixToYmd(sec: number): string {
+  const d = new Date(sec * 1000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate(),
+  ).padStart(2, "0")}`;
+}
 
 export async function indexSessions(onProgress: ProgressCb = () => {}) {
   onProgress({ stage: "sessions:fetch" });
   const sessions = await getSessions(20_000);
   const db = getDb();
+  // Only touch a session row when something the user can see actually
+  // changed. Cuts write amplification (and WAL churn) on each quick index
+  // — the common case is "no change" for hundreds of sessions.
   const upsert = db.prepare(`
     INSERT INTO sessions (username, display_name, chat_type, is_group, last_timestamp, last_msg_type, last_summary, unread, indexed_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -39,6 +69,14 @@ export async function indexSessions(onProgress: ProgressCb = () => {}) {
       last_summary=excluded.last_summary,
       unread=excluded.unread,
       indexed_at=excluded.indexed_at
+    WHERE
+         sessions.display_name IS NOT excluded.display_name
+      OR sessions.chat_type IS NOT excluded.chat_type
+      OR sessions.is_group IS NOT excluded.is_group
+      OR sessions.last_timestamp IS NOT excluded.last_timestamp
+      OR sessions.last_msg_type IS NOT excluded.last_msg_type
+      OR sessions.last_summary IS NOT excluded.last_summary
+      OR sessions.unread IS NOT excluded.unread
   `);
   const now = Date.now();
   const tx = db.transaction((rows: RawSession[]) => {
@@ -99,6 +137,31 @@ export async function indexHistoryForSession(
   let offset = 0;
   let totalIngested = 0;
   const maxMessages = opts.maxMessages ?? HISTORY_BATCH_LIMIT * HISTORY_PAGES_PER_CHAT;
+  let lastError: string | null = null;
+
+  // Always record the attempt timestamp so the deep-index scheduler can
+  // back off recently-tried chats even when they failed completely.
+  db.prepare(`UPDATE sessions SET last_history_attempt_at = ? WHERE username = ?`).run(
+    Date.now(),
+    username,
+  );
+
+  // Incremental backfill: when a chat already has indexed history, the
+  // single-run offset cap (50k pages) can leave older messages unindexed
+  // forever — offset 0 always starts from the newest. Re-running deep-index
+  // would just refetch the same recent 50k. So if we have a recorded
+  // `first_msg_timestamp`, this run targets messages strictly *older* than
+  // that via `--until <day-1>`. Each rerun extends history one window
+  // further back, and the indexer's own dedupe (uniq_msg_hash) handles
+  // any overlap at the boundary day.
+  const existing = db
+    .prepare(`SELECT first_msg_timestamp FROM sessions WHERE username = ?`)
+    .get(username) as { first_msg_timestamp: number | null } | undefined;
+  const olderThan = existing?.first_msg_timestamp ?? null;
+  // Step one day back so we don't get an empty page when `--until` is
+  // inclusive of the boundary day.
+  const untilParam =
+    olderThan !== null ? unixToYmd(olderThan - 86400) : undefined;
 
   for (let page = 0; page < HISTORY_PAGES_PER_CHAT; page++) {
     let batch: RawMessage[] = [];
@@ -107,9 +170,11 @@ export async function indexHistoryForSession(
         limit: HISTORY_BATCH_LIMIT,
         offset,
         since: opts.since,
+        until: untilParam,
       });
     } catch (err) {
-      onProgress({ stage: "history:error", detail: `${display}: ${(err as Error).message}` });
+      lastError = (err as Error).message;
+      onProgress({ stage: "history:error", detail: `${display}: ${lastError}` });
       break;
     }
     if (batch.length === 0) break;
@@ -122,14 +187,46 @@ export async function indexHistoryForSession(
     if (batch.length < HISTORY_BATCH_LIMIT) break;
   }
 
+  // Cap-hit detection: full page cap reached AND last page was a full
+  // batch → there's almost certainly more history we didn't fetch.
+  // Surface it via `last_history_error` so the user can rerun.
+  const hitCap =
+    totalIngested >= maxMessages &&
+    // The check above just hit the for-loop cap; the inner `break` would
+    // also fire on a short batch but we'd have hit the page cap first.
+    totalIngested === HISTORY_BATCH_LIMIT * HISTORY_PAGES_PER_CHAT;
+  const capNote = hitCap
+    ? `hit ${maxMessages.toLocaleString()}-msg cap, rerun deep index to backfill older history`
+    : null;
+
   const minMaxRow = db.prepare(
     `SELECT MIN(timestamp) AS min_ts, MAX(timestamp) AS max_ts, COUNT(*) AS c FROM messages WHERE chat_username = ?`,
   ).get(username) as { min_ts: number | null; max_ts: number | null; c: number };
   db.prepare(
-    `UPDATE sessions SET message_count = ?, first_msg_timestamp = ?, history_indexed_through = ? WHERE username = ?`,
-  ).run(minMaxRow.c, minMaxRow.min_ts, minMaxRow.max_ts, username);
+    `UPDATE sessions SET message_count = ?, first_msg_timestamp = ?, history_indexed_through = ?,
+                         last_history_error = ?
+     WHERE username = ?`,
+  ).run(
+    minMaxRow.c,
+    minMaxRow.min_ts,
+    minMaxRow.max_ts,
+    totalIngested === 0 ? lastError : capNote,
+    username,
+  );
 
   return totalIngested;
+}
+
+const US = String.fromCharCode(31); // record-separator, won't appear in URLs / chat names
+
+function urlDedupKey(
+  url: string,
+  timestamp: number,
+  sender: string,
+  chatUsername: string | null,
+  chatDisplay: string,
+): string {
+  return [url, timestamp, sender, chatUsername ?? chatDisplay].join(US);
 }
 
 function insertMessagesAndUrls(
@@ -144,8 +241,9 @@ function insertMessagesAndUrls(
   `);
   const findMsg = db.prepare(`SELECT id FROM messages WHERE content_hash = ?`);
   const insertUrl = db.prepare(`
-    INSERT OR IGNORE INTO urls (url, domain, domain_group, message_id, chat_username, chat_display, sender, timestamp, preview, content_hash)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO urls (url, domain, domain_group, message_id, chat_username, chat_display, sender, timestamp, preview, content_hash, dedup_key)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(dedup_key) DO NOTHING
   `);
 
   const tx = db.transaction(() => {
@@ -180,6 +278,7 @@ function insertMessagesAndUrls(
           ts,
           content.slice(0, 200),
           hash,
+          urlDedupKey(u.url, ts, sender, chatUsername, chatDisplay),
         );
       }
     }
@@ -205,6 +304,12 @@ export async function runQuickIndex(onProgress: ProgressCb = () => {}): Promise<
     stage: "backfill:done",
     detail: `${backfill.messagesUpdated} messages + ${backfill.urlsUpdated} urls linked`,
   });
+  onProgress({ stage: "rollups:start" });
+  const rollup = refreshDailyCounts();
+  onProgress({ stage: "rollups:done", detail: `${rollup.days} days` });
+  // Keep query planner's stats in sync after big inserts.
+  try { getDb().exec("ANALYZE"); } catch {}
+  invalidateAllCaches();
   setMeta("last_quick_index_at", String(Date.now()));
   return { sessions, contacts, links, elapsedMs: Date.now() - start };
 }
@@ -227,13 +332,24 @@ export async function runDeepIndex(opts: IndexDeepOptions = {}, onProgress: Prog
   const limit = opts.maxSessions ?? 1000;
 
   const placeholders = allowed.map(() => "?").join(",");
+  // Skip chats whose last attempt was within the last hour AND failed
+  // outright. "Hit the page cap" is NOT a failure — it means we got tons of
+  // data and need to backfill the older window on the next run, so those
+  // chats should keep being processed.
+  const retryCutoff = Date.now() - 60 * 60_000;
   const rows = db.prepare(
     `SELECT username, display_name FROM sessions
      WHERE chat_type IN (${placeholders})
        AND (last_timestamp IS NULL OR last_timestamp >= ?)
+       AND NOT (
+         last_history_error IS NOT NULL
+         AND last_history_error NOT LIKE 'hit %'
+         AND last_history_attempt_at IS NOT NULL
+         AND last_history_attempt_at > ?
+       )
      ORDER BY last_timestamp DESC NULLS LAST
      LIMIT ?`,
-  ).all(...allowed, cutoff, limit) as { username: string; display_name: string }[];
+  ).all(...allowed, cutoff, retryCutoff, limit) as { username: string; display_name: string }[];
 
   let done = 0;
   const total = rows.length;
@@ -250,6 +366,11 @@ export async function runDeepIndex(opts: IndexDeepOptions = {}, onProgress: Prog
     stage: "backfill:done",
     detail: `${backfill.messagesUpdated} messages + ${backfill.urlsUpdated} urls linked`,
   });
+  onProgress({ stage: "rollups:start" });
+  const rollup = refreshDailyCounts();
+  onProgress({ stage: "rollups:done", detail: `${rollup.days} days` });
+  try { getDb().exec("ANALYZE"); } catch {}
+  invalidateAllCaches();
   setMeta("last_deep_index_at", String(Date.now()));
   return { sessionsProcessed: done };
 }

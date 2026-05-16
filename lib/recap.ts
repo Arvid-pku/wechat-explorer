@@ -12,6 +12,7 @@
 
 import { getDb } from "./db";
 import { EXCLUDED_SUBQUERY, excludedSubquery, getMeHandles } from "./queries";
+import { getCachedJSON } from "./cache";
 import {
   tokenize,
   topByCount,
@@ -148,7 +149,7 @@ function buildScope(year: number, chatUsername: string | null, includeArchived =
   const yearStart = Math.floor(new Date(`${year}-01-01T00:00:00`).getTime() / 1000);
   const yearEnd = Math.floor(new Date(`${year + 1}-01-01T00:00:00`).getTime() / 1000);
   const excl = excludedSubquery({ includeArchived });
-  const exclusionClause = chatUsername ? `chat_username = ?` : `chat_username NOT IN ${excl}`;
+  const exclusionClause = chatUsername ? `chat_username = ?` : `(chat_username IS NULL OR chat_username NOT IN ${excl})`;
   return { yearStart, yearEnd, username: chatUsername, exclusionClause, excl };
 }
 
@@ -156,15 +157,21 @@ function scopedParams(scope: Scope, extra: (string | number)[] = []): (string | 
   return scope.username ? [scope.username, ...extra] : extra;
 }
 
-// In-process recap cache. Keyed by `${year}::${chatUsername ?? ''}`.
-// Invalidated after `RECAP_TTL_MS`; small enough to be safe (one entry per
-// open recap page during a browse session).
-const _recapCache = new Map<string, { recap: YearRecap; ts: number }>();
-const RECAP_TTL_MS = 5 * 60_000;
+// Recap data layer used to maintain its own in-process 5min TTL cache.
+// Now it goes through `getCachedJSON` (persistent SQLite + epoch-based
+// invalidation), which both survives dev-server restarts and keeps past
+// years cached indefinitely until the next index / archive op. The helper
+// below stays as a no-op shim for the indexer's `invalidateAllCaches()`
+// call (the persistent cache invalidates itself on epoch bump).
+export function invalidateRecapCache(): void {
+  _yearsCache = null;
+}
 
 /**
  * Fetch the entire recap for the year (and optional chat username). Heavy
- * single-call: ~500ms warm on 614k messages.
+ * single-call (~5s cold on 614k messages); persistent epoch-cache means a
+ * cold load only happens the first time after a new index/archive event,
+ * after which it's a single SQLite row read.
  */
 export function getYearRecap(
   year: number,
@@ -172,15 +179,10 @@ export function getYearRecap(
   opts: { includeArchived?: boolean } = {},
 ): YearRecap {
   const includeArchived = !!opts.includeArchived;
-  const cacheKey = `${year}::${chatUsername ?? ""}::${includeArchived ? "1" : "0"}`;
-  const cached = _recapCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < RECAP_TTL_MS) {
-    return cached.recap;
-  }
-
-  const recap = computeRecap(year, chatUsername, includeArchived);
-  _recapCache.set(cacheKey, { recap, ts: Date.now() });
-  return recap;
+  const key = `recap:y=${year}:c=${chatUsername ?? ""}:a=${includeArchived ? 1 : 0}`;
+  return getCachedJSON(key, () =>
+    computeRecap(year, chatUsername, includeArchived),
+  );
 }
 
 function computeRecap(
@@ -301,7 +303,7 @@ function computeRecap(
            FROM messages m
            JOIN sessions s ON s.username = m.chat_username
            WHERE m.timestamp >= ? AND m.timestamp < ?
-             AND m.chat_username NOT IN ${scope.excl}
+             AND (m.chat_username IS NULL OR m.chat_username NOT IN ${scope.excl})
              AND s.chat_type = 'private'
            GROUP BY s.username
            ORDER BY n DESC
@@ -330,7 +332,7 @@ function computeRecap(
            FROM messages m
            JOIN sessions s ON s.username = m.chat_username
            WHERE m.timestamp >= ? AND m.timestamp < ?
-             AND m.chat_username NOT IN ${scope.excl}
+             AND (m.chat_username IS NULL OR m.chat_username NOT IN ${scope.excl})
              AND s.chat_type = 'group'
            GROUP BY s.username
            ORDER BY n DESC
@@ -350,7 +352,7 @@ function computeRecap(
       `SELECT domain_group, COUNT(*) AS n
        FROM urls_dedup
        WHERE timestamp >= ? AND timestamp < ?
-         AND ${chatUsername ? "chat_username = ?" : `chat_username NOT IN ${scope.excl}`}
+         AND ${chatUsername ? "chat_username = ?" : `(chat_username IS NULL OR chat_username NOT IN ${scope.excl})`}
        GROUP BY domain_group
        ORDER BY n DESC
        LIMIT 25`,
@@ -399,7 +401,7 @@ function computeRecap(
           `SELECT s.username, s.display_name, s.chat_type, MIN(m.timestamp) AS first_ts, COUNT(*) AS n
            FROM messages m
            JOIN sessions s ON s.username = m.chat_username
-           WHERE m.chat_username NOT IN ${scope.excl}
+           WHERE (m.chat_username IS NULL OR m.chat_username NOT IN ${scope.excl})
            GROUP BY s.username
            HAVING first_ts >= ? AND first_ts < ?
            ORDER BY first_ts ASC
@@ -540,7 +542,7 @@ function computeRecap(
       `SELECT content
        FROM messages
        WHERE (timestamp < ? OR timestamp >= ?)
-         AND ${chatUsername ? "chat_username = ?" : `chat_username NOT IN ${scope.excl}`}
+         AND ${chatUsername ? "chat_username = ?" : `(chat_username IS NULL OR chat_username NOT IN ${scope.excl})`}
          AND msg_type IN ('文本','text','文字')
          AND length(content) > 0
          AND (id % 10) = 0
@@ -647,26 +649,6 @@ function computeRecap(
   const latencyData = { themToYou: themLat, youToThem: youLat };
 
   const monthList = monthlyRows.map((m) => m.ym);
-  // Trim unused (legacy) blocks below; the per-month loop is no longer needed.
-  for (const ym of [] as string[]) {
-    const start = 0;
-    const end = 0;
-    const rows: { sender: string; timestamp: number }[] = [];
-    if (rows.length < 20) continue;
-    const segments: typeof rows[] = [];
-    let cur: typeof rows = [];
-    let prevTs = -1;
-    for (const r of rows) {
-      if (r.timestamp < prevTs) {
-        if (cur.length) segments.push(cur);
-        cur = [];
-      }
-      cur.push(r);
-      prevTs = r.timestamp;
-    }
-    if (cur.length) segments.push(cur);
-    void segments;
-  }
   const latencyTrend: RecapLatencyTrend[] = monthList.map((ym) => {
     const r = latencyTrendMap.get(ym) ?? { them: [], you: [] };
     return {
@@ -813,8 +795,18 @@ export function getYearBaseline(
   chatUsername: string | null = null,
   opts: { includeArchived?: boolean } = {},
 ): YearBaseline {
+  const includeArchived = !!opts.includeArchived;
+  const key = `recap-baseline:y=${year}:c=${chatUsername ?? ""}:a=${includeArchived ? 1 : 0}`;
+  return getCachedJSON(key, () => computeYearBaseline(year, chatUsername, includeArchived));
+}
+
+function computeYearBaseline(
+  year: number,
+  chatUsername: string | null,
+  includeArchived: boolean,
+): YearBaseline {
   const db = getDb();
-  const scope = buildScope(year, chatUsername, !!opts.includeArchived);
+  const scope = buildScope(year, chatUsername, includeArchived);
   const totals = db
     .prepare(
       `SELECT COUNT(*) AS n,
@@ -833,7 +825,7 @@ export function getYearBaseline(
     .prepare(
       `SELECT COUNT(*) AS n FROM urls_dedup
        WHERE timestamp >= ? AND timestamp < ?
-         AND ${chatUsername ? "chat_username = ?" : `chat_username NOT IN ${scope.excl}`}`,
+         AND ${chatUsername ? "chat_username = ?" : `(chat_username IS NULL OR chat_username NOT IN ${scope.excl})`}`,
     )
     .get(scope.yearStart, scope.yearEnd, ...scopedParams(scope)) as { n: number };
 
@@ -844,7 +836,7 @@ export function getYearBaseline(
         `SELECT s.display_name FROM messages m
          JOIN sessions s ON s.username = m.chat_username
          WHERE m.timestamp >= ? AND m.timestamp < ?
-           AND m.chat_username NOT IN ${scope.excl}
+           AND (m.chat_username IS NULL OR m.chat_username NOT IN ${scope.excl})
            AND s.chat_type = 'private'
          GROUP BY s.username
          ORDER BY COUNT(*) DESC
@@ -878,7 +870,7 @@ export function getRecapYears(): number[] {
     .prepare(
       `SELECT DISTINCT CAST(strftime('%Y', timestamp, 'unixepoch', 'localtime') AS INTEGER) AS y
        FROM messages
-       WHERE chat_username NOT IN ${EXCLUDED_SUBQUERY}
+       WHERE (chat_username IS NULL OR chat_username NOT IN ${EXCLUDED_SUBQUERY})
        ORDER BY y DESC`,
     )
     .all() as { y: number }[];

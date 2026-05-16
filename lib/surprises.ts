@@ -7,7 +7,8 @@
  */
 
 import { getDb } from "./db";
-import { EXCLUDED_SUBQUERY, getMeHandles } from "./queries";
+import { EXCLUDED_SUBQUERY, ensureDailyCountsFresh, getMeHandles } from "./queries";
+import { getCachedJSON } from "./cache";
 
 export interface Surprise {
   kind: "spike" | "fresh-contact" | "new-domain" | "quiet-streak" | "favorite-shift" | "milestone";
@@ -17,23 +18,32 @@ export interface Surprise {
 }
 
 export function getSurprises(): Surprise[] {
+  // Surprises has a slight time component (anchored to "today"), so we key
+  // the cache by today's local date too — invalidates naturally at midnight.
+  const today = new Date();
+  const dayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  return getCachedJSON(`surprises:d=${dayKey}`, () => computeSurprises());
+}
+
+function computeSurprises(): Surprise[] {
+  ensureDailyCountsFresh();
   const db = getDb();
   const surprises: Surprise[] = [];
   const nowSec = Math.floor(Date.now() / 1000);
   const day = 86400;
 
-  // --- Spike detection: a day in the last 14 that's >2x the 30-day median.
+  // Local-day strings keyed against daily_counts, replacing the previous
+  // full-table scan of `messages` for the past 60 days.
+  const localDayKey = (offsetDays: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() - offsetDays);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
   const dailyRows = db
     .prepare(
-      `SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch', 'localtime') AS day, COUNT(*) AS n
-       FROM messages
-       WHERE timestamp >= ?
-         AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
-       GROUP BY day
-       ORDER BY day DESC
-       LIMIT 60`,
+      `SELECT day, n FROM daily_counts WHERE day >= ? ORDER BY day DESC LIMIT 60`,
     )
-    .all(nowSec - 60 * day) as { day: string; n: number }[];
+    .all(localDayKey(60)) as { day: string; n: number }[];
   if (dailyRows.length > 7) {
     const sorted = [...dailyRows.map((r) => r.n)].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)] || 1;
@@ -52,16 +62,14 @@ export function getSurprises(): Surprise[] {
     }
   }
 
-  // --- Quiet streaks: longest run of zero-message days in last 90 (telling on its own).
+  // --- Quiet streaks: longest run of zero-message days in last 90.
   if (dailyRows.length > 0) {
     const map = new Map(dailyRows.map((r) => [r.day, r.n]));
     let cur = 0;
     let longest = 0;
     let longestEnd: string | null = null;
     for (let i = 0; i < 90; i++) {
-      const ts = nowSec - i * day;
-      const d = new Date(ts * 1000);
-      const key = d.toISOString().slice(0, 10);
+      const key = localDayKey(i); // local day, matches daily_counts keys
       const n = map.get(key) ?? 0;
       if (n === 0) {
         cur++;
@@ -92,7 +100,7 @@ export function getSurprises(): Surprise[] {
               COUNT(*) AS n
        FROM messages m
        JOIN sessions s ON s.username = m.chat_username
-       WHERE m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
+       WHERE (m.chat_username IS NULL OR m.chat_username NOT IN ${EXCLUDED_SUBQUERY})
        GROUP BY s.username
        HAVING first_ts >= ? AND n >= 20
        ORDER BY n DESC
@@ -114,14 +122,14 @@ export function getSurprises(): Surprise[] {
   const recentDomains = db
     .prepare(
       `SELECT domain_group, COUNT(*) AS n FROM urls_dedup
-       WHERE timestamp >= ? AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
+       WHERE timestamp >= ? AND (chat_username IS NULL OR chat_username NOT IN ${EXCLUDED_SUBQUERY})
        GROUP BY domain_group`,
     )
     .all(nowSec - 14 * day) as { domain_group: string; n: number }[];
   const baseDomains = db
     .prepare(
       `SELECT domain_group, COUNT(*) AS n FROM urls_dedup
-       WHERE timestamp < ? AND timestamp >= ? AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
+       WHERE timestamp < ? AND timestamp >= ? AND (chat_username IS NULL OR chat_username NOT IN ${EXCLUDED_SUBQUERY})
        GROUP BY domain_group`,
     )
     .all(nowSec - 14 * day, nowSec - 90 * day) as { domain_group: string; n: number }[];
@@ -151,10 +159,9 @@ export function getSurprises(): Surprise[] {
   // --- Milestone: hit a round-numbered total messages this week
   const totalThisWeek = (db
     .prepare(
-      `SELECT COUNT(*) AS n FROM messages WHERE timestamp >= ?
-       AND chat_username NOT IN ${EXCLUDED_SUBQUERY}`,
+      `SELECT COALESCE(SUM(n), 0) AS n FROM daily_counts WHERE day >= ?`,
     )
-    .get(nowSec - 7 * day) as { n: number }).n;
+    .get(localDayKey(7)) as { n: number }).n;
   if (totalThisWeek >= 5000) {
     surprises.push({
       kind: "milestone",
@@ -175,7 +182,7 @@ export function getSurprises(): Surprise[] {
          FROM messages m
          JOIN sessions s ON s.username = m.chat_username
          WHERE m.timestamp >= ?
-           AND m.chat_username NOT IN ${EXCLUDED_SUBQUERY}
+           AND (m.chat_username IS NULL OR m.chat_username NOT IN ${EXCLUDED_SUBQUERY})
            AND s.chat_type = 'private'
          GROUP BY s.username
          HAVING mine >= 5 AND total - mine >= 5

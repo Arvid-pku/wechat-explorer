@@ -7,6 +7,7 @@
 
 import { getDb } from "./db";
 import { EXCLUDED_SUBQUERY, excludedSubquery, getMeHandles } from "./queries";
+import { getCachedJSON } from "./cache";
 
 // ────────────────────────────────────────────────────────────────────────────
 // Sessions
@@ -24,6 +25,10 @@ export interface SessionsStats {
 }
 
 export function getSessionsStats(): SessionsStats {
+  return getCachedJSON("stats:sessions", () => computeSessionsStats());
+}
+
+function computeSessionsStats(): SessionsStats {
   const db = getDb();
   const nowSec = Math.floor(Date.now() / 1000);
 
@@ -134,6 +139,10 @@ export interface MessagesStats {
 }
 
 export function getMessagesStats(): MessagesStats {
+  return getCachedJSON("stats:messages", () => computeMessagesStats());
+}
+
+function computeMessagesStats(): MessagesStats {
   const db = getDb();
   const meHandles = getMeHandles();
   const meIn = meHandles.length ? `IN (${meHandles.map(() => "?").join(",")})` : `IN ('')`;
@@ -144,7 +153,7 @@ export function getMessagesStats(): MessagesStats {
       `SELECT COUNT(*) AS total,
               SUM(CASE WHEN sender ${meIn} THEN 1 ELSE 0 END) AS mine
        FROM messages
-       WHERE chat_username NOT IN ${excl}`,
+       WHERE (chat_username IS NULL OR chat_username NOT IN ${excl})`,
     )
     .get(...meHandles) as { total: number; mine: number };
 
@@ -161,7 +170,7 @@ export function getMessagesStats(): MessagesStats {
               COUNT(*) AS n,
               SUM(CASE WHEN sender ${meIn} THEN 1 ELSE 0 END) AS mine
        FROM messages
-       WHERE chat_username NOT IN ${excl}
+       WHERE (chat_username IS NULL OR chat_username NOT IN ${excl})
        GROUP BY msg_type
        ORDER BY n DESC
        LIMIT 12`,
@@ -174,7 +183,7 @@ export function getMessagesStats(): MessagesStats {
               COUNT(*) AS total,
               SUM(CASE WHEN sender ${meIn} THEN 1 ELSE 0 END) AS mine
        FROM messages
-       WHERE chat_username NOT IN ${excl}
+       WHERE (chat_username IS NULL OR chat_username NOT IN ${excl})
        GROUP BY ym
        ORDER BY ym`,
     )
@@ -187,7 +196,7 @@ export function getMessagesStats(): MessagesStats {
       `SELECT CAST(strftime('%w', timestamp, 'unixepoch', 'localtime') AS INTEGER) AS dow,
               COUNT(*) AS n
        FROM messages
-       WHERE chat_username NOT IN ${excl}
+       WHERE (chat_username IS NULL OR chat_username NOT IN ${excl})
        GROUP BY dow
        ORDER BY dow`,
     )
@@ -203,7 +212,7 @@ export function getMessagesStats(): MessagesStats {
               COUNT(*) AS total,
               SUM(CASE WHEN sender ${meIn} THEN 1 ELSE 0 END) AS mine
        FROM messages
-       WHERE chat_username NOT IN ${excl}
+       WHERE (chat_username IS NULL OR chat_username NOT IN ${excl})
        GROUP BY hour`,
     )
     .all(...meHandles) as { hour: number; total: number; mine: number }[];
@@ -217,7 +226,7 @@ export function getMessagesStats(): MessagesStats {
       `SELECT id, chat_display, chat_username, length(content) AS len, substr(content, 1, 80) AS preview
        FROM messages
        WHERE msg_type IN ('文本','text','文字')
-         AND chat_username NOT IN ${excl}
+         AND (chat_username IS NULL OR chat_username NOT IN ${excl})
          AND length(content) BETWEEN 50 AND 5000
        ORDER BY len DESC
        LIMIT 5`,
@@ -230,7 +239,7 @@ export function getMessagesStats(): MessagesStats {
               strftime('%Y-%m-%d %H:%M', timestamp, 'unixepoch', 'localtime') AS minute,
               COUNT(*) AS n
        FROM messages
-       WHERE chat_username NOT IN ${excl}
+       WHERE (chat_username IS NULL OR chat_username NOT IN ${excl})
        GROUP BY chat_username, minute
        ORDER BY n DESC
        LIMIT 5`,
@@ -265,19 +274,24 @@ export interface LinksStats {
 }
 
 export function getLinksStats(opts: { includeArchived?: boolean } = {}): LinksStats {
+  const key = `stats:links:a=${opts.includeArchived ? 1 : 0}`;
+  return getCachedJSON(key, () => computeLinksStats(opts));
+}
+
+function computeLinksStats(opts: { includeArchived?: boolean } = {}): LinksStats {
   const db = getDb();
   const excl = excludedSubquery(opts);
 
   const total = (db
     .prepare(
-      `SELECT COUNT(*) AS n FROM urls_dedup WHERE chat_username NOT IN ${excl}`,
+      `SELECT COUNT(*) AS n FROM urls_dedup WHERE (chat_username IS NULL OR chat_username NOT IN ${excl})`,
     )
     .get() as { n: number }).n;
 
   const byGroup = db
     .prepare(
       `SELECT domain_group, COUNT(*) AS n FROM urls_dedup
-       WHERE chat_username NOT IN ${excl}
+       WHERE (chat_username IS NULL OR chat_username NOT IN ${excl})
        GROUP BY domain_group
        ORDER BY n DESC LIMIT 12`,
     )
@@ -286,7 +300,7 @@ export function getLinksStats(opts: { includeArchived?: boolean } = {}): LinksSt
   const topDomains = db
     .prepare(
       `SELECT domain, domain_group, COUNT(*) AS n FROM urls_dedup
-       WHERE chat_username NOT IN ${excl}
+       WHERE (chat_username IS NULL OR chat_username NOT IN ${excl})
        GROUP BY domain
        ORDER BY n DESC LIMIT 20`,
     )
@@ -296,7 +310,7 @@ export function getLinksStats(opts: { includeArchived?: boolean } = {}): LinksSt
     .prepare(
       `SELECT strftime('%Y-%m', timestamp, 'unixepoch', 'localtime') AS ym, COUNT(*) AS n
        FROM urls_dedup
-       WHERE chat_username NOT IN ${excl}
+       WHERE (chat_username IS NULL OR chat_username NOT IN ${excl})
        GROUP BY ym
        ORDER BY ym`,
     )
@@ -305,7 +319,7 @@ export function getLinksStats(opts: { includeArchived?: boolean } = {}): LinksSt
   const topSenders = db
     .prepare(
       `SELECT sender, COUNT(*) AS n FROM urls_dedup
-       WHERE sender != '' AND chat_username NOT IN ${excl}
+       WHERE sender != '' AND (chat_username IS NULL OR chat_username NOT IN ${excl})
        GROUP BY sender
        ORDER BY n DESC LIMIT 15`,
     )
@@ -314,7 +328,7 @@ export function getLinksStats(opts: { includeArchived?: boolean } = {}): LinksSt
   const topChats = db
     .prepare(
       `SELECT chat_display, chat_username, COUNT(*) AS n FROM urls_dedup
-       WHERE chat_username NOT IN ${excl}
+       WHERE (chat_username IS NULL OR chat_username NOT IN ${excl})
        GROUP BY chat_username, chat_display
        ORDER BY n DESC LIMIT 15`,
     )
@@ -343,6 +357,10 @@ export interface ContactsStats {
 }
 
 export function getContactsStats(): ContactsStats {
+  return getCachedJSON("stats:contacts", () => computeContactsStats());
+}
+
+function computeContactsStats(): ContactsStats {
   const db = getDb();
   const total = (db.prepare(`SELECT COUNT(*) AS n FROM contacts`).get() as { n: number }).n;
 

@@ -12,7 +12,7 @@
  */
 import { getDb } from "./db";
 import { getMeHandles } from "./queries";
-import { tokenize, termFreq, tfidfAgainst, topByCount, topEmoji, vocabDiff, type ScoredWord } from "./text";
+import { termFreq, tfidfAgainst, topEmoji, vocabDiff, type ScoredWord } from "./text";
 import { computeLatencies, type LatencyResult } from "./latency";
 
 export const RECENT_TOKEN_LIMIT = 5000;
@@ -22,6 +22,11 @@ const BASELINE_TTL_MS = 24 * 60 * 60 * 1000;
 /* ---------- baseline cache for TF-IDF ---------- */
 
 let _baselineCache: { tf: Map<string, number>; ts: number } | null = null;
+
+/** Reset the TF-IDF baseline cache — called from the indexer post-run. */
+export function invalidateContactBaseline(): void {
+  _baselineCache = null;
+}
 
 /**
  * Get (and cache) the global token baseline. Uses a 20k random text-message
@@ -139,17 +144,19 @@ export interface ContactAnalytics {
 /* ---------- helpers ---------- */
 
 /**
- * Pick a usable "me" sender set for this chat. The global me-handle list can
- * include the empty string (which would label every "them" message in private
- * chats as me). For private chats we always restrict to non-empty handles
- * that actually appear here. For groups we just take the known me-handles.
+ * Pick a usable "me" sender set for this chat. The global me-handle list is
+ * already filtered to non-empty senders (see queries.ts), so we just keep
+ * the ones that actually appear in this chat.
+ *
+ * Reversed from an earlier draft: wx CLI emits `sender = ""` for the OTHER
+ * party in 1:1 private chats — NOT for the user. Treating "" as me would
+ * flip every share / latency reading in private chats. With that fixed, a
+ * private chat where none of your real handles appear simply has no
+ * me-attributable messages (and the UI displays "—" rather than a wrong
+ * number).
  */
-function pickMeHandles(handles: string[], chatType: string, presentSenders: Set<string>): string[] {
+function pickMeHandles(handles: string[], _chatType: string, presentSenders: Set<string>): string[] {
   const nonEmpty = handles.filter((h) => h && h.length > 0);
-  if (chatType !== "group") {
-    // private chat: only meaningful me-handle is the non-empty one that appears here
-    return nonEmpty.filter((h) => presentSenders.has(h));
-  }
   return nonEmpty.filter((h) => presentSenders.has(h));
 }
 

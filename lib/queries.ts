@@ -1,4 +1,5 @@
 import { getDb, getMeta, setMeta } from "./db";
+import { getCachedJSON } from "./cache";
 
 /**
  * Globally-excluded sessions for stats / search / links: archived OR
@@ -6,9 +7,13 @@ import { getDb, getMeta, setMeta } from "./db";
  * user's *active personal* chat history. Reading and the contact-type tabs
  * intentionally bypass this exclusion to remain navigable.
  *
- * `EXCLUDED_SUBQUERY` (constant) keeps the old call-sites compiling.
- * Prefer the function form `excludedSubquery({ includeArchived })` for new
- * code that wants to let users opt in to including archived chats.
+ * `EXCLUDED_SUBQUERY` is the raw subquery — use it inside `IN (...)` /
+ * `NOT IN (...)` / `EXISTS (...)` when joining or filtering a column you
+ * know is non-NULL. Prefer `EXCLUDED_CHAT_CLAUSE` (or the function form
+ * `excludedChatClause()`) when filtering `messages.chat_username` /
+ * `urls.chat_username`, because SQL `NULL NOT IN (...)` is `NULL` (i.e.
+ * the row is dropped) and we have 18 NULL-chat messages that would
+ * otherwise vanish from every total.
  */
 export const EXCLUDED_SUBQUERY = `(SELECT username FROM sessions WHERE archived = 1 OR chat_type IN ('official','folded'))`;
 
@@ -18,15 +23,36 @@ export function excludedSubquery({ includeArchived = false }: { includeArchived?
     : EXCLUDED_SUBQUERY;
 }
 
+/** Default-alias predicate for filtering chat_username while keeping NULL rows. */
+export const EXCLUDED_CHAT_CLAUSE = `(chat_username IS NULL OR chat_username NOT IN ${EXCLUDED_SUBQUERY})`;
+
+/**
+ * Predicate-form of the exclusion. Picks the right alias and honours
+ * includeArchived. Always includes NULL-chat_username rows — they don't
+ * belong to any session and shouldn't be silently dropped.
+ */
+export function excludedChatClause(
+  opts: { alias?: string; includeArchived?: boolean } = {},
+): string {
+  const col = opts.alias ? `${opts.alias}.chat_username` : `chat_username`;
+  const sub = excludedSubquery({ includeArchived: opts.includeArchived });
+  return `(${col} IS NULL OR ${col} NOT IN ${sub})`;
+}
+
 const ME_HANDLES_KEY = "me_handles";
 const ME_BACKFILLED_AT_KEY = "my_msg_count_backfilled_at";
 
 export function detectMeHandles(): { handles: string[]; rankings: { sender: string; distinct_chats: number; msgs: number }[] } {
   const db = getDb();
+  // Look at the top non-empty senders. NEVER pick the empty-string sender as
+  // a me-handle: in WeChat 1:1 private chats wx CLI emits `sender=""` for the
+  // OTHER party's messages (the user's own messages get the real handle).
+  // Counting "" as me classifies every incoming private message as outgoing
+  // and ~doubles "your share" across the app.
   const rows = db.prepare(`
     SELECT sender, COUNT(DISTINCT chat_username) AS distinct_chats, COUNT(*) AS msgs
     FROM messages
-    WHERE chat_username IS NOT NULL
+    WHERE chat_username IS NOT NULL AND sender != ''
     GROUP BY sender
     ORDER BY distinct_chats DESC
     LIMIT 5
@@ -44,14 +70,19 @@ export function getMeHandles(): string[] {
   if (v) {
     try {
       const parsed = JSON.parse(v);
-      if (Array.isArray(parsed)) return parsed;
+      // Defensive: even if an older stored value contains the empty-string
+      // sender, strip it on read. wx CLI emits "" for the *other* side of
+      // private chats — treating it as a me-handle inverts every share /
+      // latency metric for 1:1 conversations.
+      if (Array.isArray(parsed)) return parsed.filter((h: unknown) => typeof h === "string" && h !== "");
     } catch {}
   }
   return [];
 }
 
 export function setMeHandles(handles: string[]) {
-  setMeta(ME_HANDLES_KEY, JSON.stringify(handles));
+  const clean = handles.filter((h) => typeof h === "string" && h !== "");
+  setMeta(ME_HANDLES_KEY, JSON.stringify(clean));
 }
 
 export function getMeBackfilledAt(): number | null {
@@ -219,6 +250,11 @@ export interface Overview {
 }
 
 export function getOverview(): Overview {
+  return getCachedJSON("overview", () => computeOverview());
+}
+
+function computeOverview(): Overview {
+  ensureDailyCountsFresh();
   const db = getDb();
   const sessions = db.prepare(`SELECT chat_type, archived, COUNT(*) AS n FROM sessions GROUP BY chat_type, archived`).all() as { chat_type: string; archived: number; n: number }[];
   const sessionsByType: Record<string, number> = {};
@@ -229,50 +265,58 @@ export function getOverview(): Overview {
   }
   const totalSessions = Object.values(sessionsByType).reduce((a, b) => a + b, 0);
 
-  const nowSec = Math.floor(Date.now() / 1000);
+  // Day-bound cutoffs derived from local-time days, matching `daily_counts` keys.
+  const today = new Date();
+  const localDay = (offset: number) => {
+    const d = new Date(today);
+    d.setDate(d.getDate() - offset);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
 
-  const msgAgg = db.prepare(`
-    SELECT
-      COUNT(*) AS total,
-      SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END) AS last7d,
-      SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END) AS last30d,
-      SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END) AS last365d
-    FROM messages
-    WHERE chat_username NOT IN ${EXCLUDED_SUBQUERY}
-  `).get(
-    nowSec - 7 * 86400,
-    nowSec - 30 * 86400,
-    nowSec - 365 * 86400,
-  ) as { total: number; last7d: number; last30d: number; last365d: number };
+  // All msg / activity aggregates now read from the rollup → one O(days) scan
+  // instead of three full table scans + an aggregate over 614k rows.
+  const dailyAgg = db
+    .prepare(
+      `SELECT
+         SUM(n) AS total,
+         SUM(CASE WHEN day >= ? THEN n ELSE 0 END) AS last7d,
+         SUM(CASE WHEN day >= ? THEN n ELSE 0 END) AS last30d,
+         SUM(CASE WHEN day >= ? THEN n ELSE 0 END) AS last365d
+       FROM daily_counts`,
+    )
+    .get(localDay(7), localDay(30), localDay(365)) as
+    | { total: number | null; last7d: number | null; last30d: number | null; last365d: number | null }
+    | undefined;
+  const msgAgg = {
+    total: dailyAgg?.total ?? 0,
+    last7d: dailyAgg?.last7d ?? 0,
+    last30d: dailyAgg?.last30d ?? 0,
+    last365d: dailyAgg?.last365d ?? 0,
+  };
 
   const urlAgg = db.prepare(`
     SELECT COUNT(*) AS total, COUNT(DISTINCT domain) AS uniqueDomains
     FROM urls_dedup
-    WHERE chat_username NOT IN ${EXCLUDED_SUBQUERY}
+    WHERE (chat_username IS NULL OR chat_username NOT IN ${EXCLUDED_SUBQUERY})
   `).get() as { total: number; uniqueDomains: number };
 
   const contacts = (db.prepare(`SELECT COUNT(*) AS n FROM contacts`).get() as { n: number }).n;
 
   const topDomains = db.prepare(`
     SELECT domain_group, COUNT(*) AS n FROM urls_dedup
-    WHERE chat_username NOT IN ${EXCLUDED_SUBQUERY}
+    WHERE (chat_username IS NULL OR chat_username NOT IN ${EXCLUDED_SUBQUERY})
     GROUP BY domain_group ORDER BY n DESC LIMIT 12
   `).all() as { domain_group: string; n: number }[];
 
   const msgTypes = db.prepare(`
     SELECT msg_type, COUNT(*) AS n FROM messages
-    WHERE chat_username NOT IN ${EXCLUDED_SUBQUERY}
+    WHERE (chat_username IS NULL OR chat_username NOT IN ${EXCLUDED_SUBQUERY})
     GROUP BY msg_type ORDER BY n DESC LIMIT 10
   `).all() as { msg_type: string; n: number }[];
 
-  const activityByDay = db.prepare(`
-    SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch', 'localtime') AS day, COUNT(*) AS n
-    FROM messages
-    WHERE timestamp >= ?
-      AND chat_username NOT IN ${EXCLUDED_SUBQUERY}
-    GROUP BY day
-    ORDER BY day
-  `).all(nowSec - 365 * 86400) as { day: string; n: number }[];
+  const activityByDay = db.prepare(
+    `SELECT day, n FROM daily_counts WHERE day >= ? ORDER BY day`,
+  ).all(localDay(365)) as { day: string; n: number }[];
 
   const lastIndexedAt = (db.prepare(`SELECT value FROM meta WHERE key = 'last_quick_index_at'`).get() as { value: string } | undefined)?.value ?? null;
 
@@ -305,6 +349,8 @@ export interface ContactRow {
   url_count: number;
   unread: number;
   archived: number;
+  /** "hit X-msg cap" when the last indexing pass capped early. */
+  last_history_error: string | null;
 }
 
 export function listSessions(opts: { type?: string; sort?: string; limit?: number; q?: string; includeArchived?: boolean; onlyArchived?: boolean } = {}): ContactRow[] {
@@ -326,13 +372,20 @@ export function listSessions(opts: { type?: string; sort?: string; limit?: numbe
   }
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
+  // sort is `<key>` (uses each column's natural direction) or `<key>-asc` /
+  // `<key>-desc` for an explicit override. Lets the column-header popover
+  // toggle sort direction without inventing a separate `dir` URL param.
   const orderBy = (() => {
     switch (opts.sort) {
-      case "messages": return "ORDER BY message_count DESC";
-      case "urls": return "ORDER BY url_count DESC";
-      case "name": return "ORDER BY s.display_name ASC";
+      case "messages":      return "ORDER BY message_count DESC";
+      case "messages-asc":  return "ORDER BY message_count ASC";
+      case "urls":          return "ORDER BY url_count DESC";
+      case "urls-asc":      return "ORDER BY url_count ASC";
+      case "name":          return "ORDER BY s.display_name ASC";
+      case "name-desc":     return "ORDER BY s.display_name DESC";
+      case "recent-asc":    return "ORDER BY s.last_timestamp ASC NULLS LAST";
       case "recent":
-      default: return "ORDER BY s.last_timestamp DESC NULLS LAST";
+      default:              return "ORDER BY s.last_timestamp DESC NULLS LAST";
     }
   })();
 
@@ -344,6 +397,7 @@ export function listSessions(opts: { type?: string; sort?: string; limit?: numbe
     )
     SELECT
       s.username, s.display_name, s.chat_type, s.is_group, s.last_timestamp, s.unread, s.archived,
+      s.last_history_error,
       COALESCE(s.message_count, 0) AS message_count,
       COALESCE((SELECT n FROM url_counts WHERE chat_username = s.username), 0) AS url_count
     FROM sessions s
@@ -372,22 +426,37 @@ export function getLinkGroups(opts: { includeArchived?: boolean } = {}): { domai
   return db.prepare(`
     SELECT domain_group, COUNT(*) AS n, MAX(timestamp) AS latest_ts
     FROM urls_dedup
-    WHERE chat_username NOT IN ${excl}
+    WHERE (chat_username IS NULL OR chat_username NOT IN ${excl})
     GROUP BY domain_group
     ORDER BY n DESC
   `).all() as { domain_group: string; n: number; latest_ts: number }[];
 }
 
-export function getLinksInGroup(group: string, opts: { limit?: number; offset?: number; sender?: string; chat?: string; q?: string; includeArchived?: boolean } = {}) {
+export function getLinksInGroup(
+  group: string,
+  opts: {
+    limit?: number;
+    offset?: number;
+    sender?: string;
+    chat?: string;
+    chatUsername?: string;
+    q?: string;
+    includeArchived?: boolean;
+  } = {},
+) {
   const db = getDb();
   const excl = excludedSubquery(opts);
-  const conditions = [`domain_group = ?`, `chat_username NOT IN ${excl}`];
+  const conditions = [`domain_group = ?`, `(chat_username IS NULL OR chat_username NOT IN ${excl})`];
   const params: (string | number)[] = [group];
   if (opts.sender) {
     conditions.push("sender = ?");
     params.push(opts.sender);
   }
-  if (opts.chat) {
+  // Prefer username over display name — same dedup-safety reasoning as search.
+  if (opts.chatUsername) {
+    conditions.push("chat_username = ?");
+    params.push(opts.chatUsername);
+  } else if (opts.chat) {
     conditions.push("chat_display = ?");
     params.push(opts.chat);
   }
@@ -415,34 +484,101 @@ export function getLinksInGroup(group: string, opts: { limit?: number; offset?: 
   }[];
 }
 
-export function getLinkGroupFacets(group: string, opts: { includeArchived?: boolean } = {}): { senders: { sender: string; n: number }[]; chats: { chat_display: string; n: number }[] } {
+export function getLinkGroupFacets(
+  group: string,
+  opts: { includeArchived?: boolean; chatUsername?: string } = {},
+): { senders: { sender: string; n: number }[]; chats: { chat_display: string; n: number }[] } {
   const db = getDb();
   const excl = excludedSubquery(opts);
-  const senders = db.prepare(
-    `SELECT sender, COUNT(*) AS n FROM urls_dedup
-     WHERE domain_group = ? AND sender != '' AND chat_username NOT IN ${excl}
-     GROUP BY sender ORDER BY n DESC LIMIT 30`,
-  ).all(group) as { sender: string; n: number }[];
-  const chats = db.prepare(
-    `SELECT chat_display, COUNT(*) AS n FROM urls_dedup
-     WHERE domain_group = ? AND chat_username NOT IN ${excl}
-     GROUP BY chat_display ORDER BY n DESC LIMIT 30`,
-  ).all(group) as { chat_display: string; n: number }[];
+  // When chat-scoped, the facets only make sense within that one chat —
+  // senders becomes "who in this chat sent links of this group", chats list
+  // collapses to one row.
+  const chatFilter = opts.chatUsername ? "AND chat_username = ?" : "";
+  const params: (string | number)[] = opts.chatUsername
+    ? [group, opts.chatUsername]
+    : [group];
+  const senders = db
+    .prepare(
+      `SELECT sender, COUNT(*) AS n FROM urls_dedup
+       WHERE domain_group = ? AND sender != '' AND (chat_username IS NULL OR chat_username NOT IN ${excl})
+         ${chatFilter}
+       GROUP BY sender ORDER BY n DESC LIMIT 30`,
+    )
+    .all(...params) as { sender: string; n: number }[];
+  const chats = db
+    .prepare(
+      `SELECT chat_display, COUNT(*) AS n FROM urls_dedup
+       WHERE domain_group = ? AND (chat_username IS NULL OR chat_username NOT IN ${excl})
+         ${chatFilter}
+       GROUP BY chat_display ORDER BY n DESC LIMIT 30`,
+    )
+    .all(...params) as { chat_display: string; n: number }[];
   return { senders, chats };
 }
 
-export function searchMessages(q: string, opts: { limit?: number; type?: string; chat?: string; includeArchived?: boolean } = {}) {
+/**
+ * Parse a user query into phrase tokens. Either `"…"`-wrapped phrases or
+ * whitespace-separated bare words. Doubled `""` inside a phrase escapes a
+ * single `"`. Empty / whitespace-only input yields [].
+ */
+export function parseSearchTokens(q: string): string[] {
+  const out: string[] = [];
+  const s = q.trim();
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (/\s/.test(ch)) { i++; continue; }
+    if (ch === '"') {
+      let j = i + 1;
+      let token = "";
+      while (j < s.length) {
+        if (s[j] === '"') {
+          if (s[j + 1] === '"') { token += '"'; j += 2; continue; }
+          j++; break;
+        }
+        token += s[j]; j++;
+      }
+      if (token.length > 0) out.push(token);
+      i = j;
+    } else {
+      let j = i;
+      while (j < s.length && !/\s/.test(s[j]) && s[j] !== '"') j++;
+      out.push(s.slice(i, j));
+      i = j;
+    }
+  }
+  return out;
+}
+
+export function searchMessages(
+  q: string,
+  opts: {
+    limit?: number;
+    type?: string;
+    chat?: string;
+    chatUsername?: string;
+    includeArchived?: boolean;
+  } = {},
+) {
   const db = getDb();
-  const trimmed = q.trim();
-  if (!trimmed) return [];
+  const tokens = parseSearchTokens(q);
+  if (tokens.length === 0) return [];
   const excl = excludedSubquery(opts);
 
   const limit = opts.limit ?? 100;
   const typeFilter = opts.type ? " AND m.msg_type = ?" : "";
-  const chatFilter = opts.chat ? " AND m.chat_display = ?" : "";
+  // Prefer chat_username when provided — display names collide constantly in
+  // WeChat, while username is globally unique. `chat` (display) stays as a
+  // fallback for older external links.
+  const chatFilter = opts.chatUsername
+    ? " AND m.chat_username = ?"
+    : opts.chat
+      ? " AND m.chat_display = ?"
+      : "";
   const extraParams: (string | number)[] = [];
   if (opts.type) extraParams.push(opts.type);
-  if (opts.chat) extraParams.push(opts.chat);
+  if (opts.chatUsername) extraParams.push(opts.chatUsername);
+  else if (opts.chat) extraParams.push(opts.chat);
 
   type Row = {
     id: number;
@@ -455,55 +591,81 @@ export function searchMessages(q: string, opts: { limit?: number; type?: string;
     snippet: string;
   };
 
-  // Strip any wrapping double-quotes a caller added for FTS phrase syntax,
-  // so the length check sees the actual user input.
-  const bare =
-    trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')
-      ? trimmed.slice(1, -1).replace(/""/g, '"')
-      : trimmed;
+  // SQLite FTS5's trigram tokenizer can't match tokens < 3 chars (very common
+  // for 2-char CJK queries). If *any* token is short, fall back to AND-LIKE
+  // for correctness — slower full scan but covers the case.
+  const anyShort = tokens.some((t) => t.length < 3);
+  let rows: Omit<Row, "snippet">[];
 
-  // SQLite FTS5's trigram tokenizer needs >= 3 characters per token, so any
-  // query shorter than 3 chars (very common for CJK) returns 0 matches.
-  // Fall back to plain LIKE in that case. Slower (full scan) but correct.
-  if (bare.length < 3) {
-    const like = `%${bare.replace(/[\\%_]/g, (c) => "\\" + c)}%`;
-    const rows = db
+  if (anyShort) {
+    const likeParams: (string | number)[] = [];
+    const likeConds: string[] = [];
+    for (const t of tokens) {
+      likeConds.push(`m.content LIKE ? ESCAPE '\\'`);
+      likeParams.push(`%${t.replace(/[\\%_]/g, (c) => "\\" + c)}%`);
+    }
+    rows = db
       .prepare(
         `SELECT m.id, m.chat_username, m.chat_display, m.sender, m.msg_type, m.content, m.timestamp
          FROM messages m
-         WHERE m.content LIKE ? ESCAPE '\\'
-           AND m.chat_username NOT IN ${excl}
+         WHERE ${likeConds.join(" AND ")}
+           AND (m.chat_username IS NULL OR m.chat_username NOT IN ${excl})
            ${typeFilter}${chatFilter}
          ORDER BY m.timestamp DESC
          LIMIT ?`,
       )
-      .all(like, ...extraParams, limit) as Omit<Row, "snippet">[];
-    // Build a basic snippet ourselves: highlight the first occurrence.
-    return rows.map<Row>((r) => {
-      const idx = r.content.toLowerCase().indexOf(bare.toLowerCase());
-      const lead = Math.max(0, idx - 24);
-      const tail = Math.min(r.content.length, idx + bare.length + 24);
-      const before = (lead > 0 ? "…" : "") + escapeHtml(r.content.slice(lead, idx));
-      const match = `<mark>${escapeHtml(r.content.slice(idx, idx + bare.length))}</mark>`;
-      const after = escapeHtml(r.content.slice(idx + bare.length, tail)) + (tail < r.content.length ? "…" : "");
-      return { ...r, snippet: idx >= 0 ? before + match + after : escapeHtml(r.content.slice(0, 80)) };
-    });
+      .all(...likeParams, ...extraParams, limit) as Omit<Row, "snippet">[];
+  } else {
+    // FTS5 with each token wrapped as a literal phrase so operators (`:`, `-`,
+    // `*`, `NEAR`, etc.) inside user input never trigger FTS syntax errors.
+    const ftsQuery = tokens
+      .map((t) => `"${t.replace(/"/g, '""')}"`)
+      .join(" ");
+    rows = db
+      .prepare(
+        `SELECT m.id, m.chat_username, m.chat_display, m.sender, m.msg_type, m.content, m.timestamp
+         FROM messages_fts
+         JOIN messages m ON m.id = messages_fts.rowid
+         WHERE messages_fts MATCH ?
+           AND (m.chat_username IS NULL OR m.chat_username NOT IN ${excl})
+           ${typeFilter}${chatFilter}
+         ORDER BY m.timestamp DESC
+         LIMIT ?`,
+      )
+      .all(ftsQuery, ...extraParams, limit) as Omit<Row, "snippet">[];
   }
 
-  const params: (string | number)[] = [trimmed, ...extraParams, limit];
-  return db
-    .prepare(
-      `SELECT m.id, m.chat_username, m.chat_display, m.sender, m.msg_type, m.content, m.timestamp,
-              snippet(messages_fts, 0, '<mark>', '</mark>', '…', 12) AS snippet
-       FROM messages_fts
-       JOIN messages m ON m.id = messages_fts.rowid
-       WHERE messages_fts MATCH ?
-         AND m.chat_username NOT IN ${excl}
-         ${typeFilter}${chatFilter}
-       ORDER BY m.timestamp DESC
-       LIMIT ?`,
-    )
-    .all(...params) as Row[];
+  // Build snippets in JS so we always escape HTML before injecting marks.
+  // Avoids stored-XSS via forwarded messages containing literal HTML —
+  // the FTS5 `snippet()` function would otherwise emit raw content unescaped.
+  return rows.map<Row>((r) => ({ ...r, snippet: buildSnippet(r.content, tokens) }));
+}
+
+function buildSnippet(content: string, tokens: string[]): string {
+  if (!content) return "";
+  const lower = content.toLowerCase();
+  let bestIdx = -1;
+  let bestTokLen = 0;
+  for (const t of tokens) {
+    const idx = lower.indexOf(t.toLowerCase());
+    if (idx < 0) continue;
+    if (bestIdx < 0 || idx < bestIdx) {
+      bestIdx = idx;
+      bestTokLen = t.length;
+    }
+  }
+  if (bestIdx < 0) {
+    return escapeHtml(content.slice(0, 80)) + (content.length > 80 ? "…" : "");
+  }
+  const lead = Math.max(0, bestIdx - 24);
+  const tail = Math.min(content.length, bestIdx + bestTokLen + 24);
+  const before =
+    (lead > 0 ? "…" : "") + escapeHtml(content.slice(lead, bestIdx));
+  const match = `<mark>${escapeHtml(content.slice(bestIdx, bestIdx + bestTokLen))}</mark>`;
+  const after =
+    escapeHtml(content.slice(bestIdx + bestTokLen, tail)) +
+    (tail < content.length ? "…" : "");
+  return before + match + after;
 }
 
 function escapeHtml(s: string): string {
@@ -515,17 +677,37 @@ function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
-export function getHeatmap(year: number, opts: { includeArchived?: boolean } = {}): { day: string; n: number }[] {
+export function getHeatmap(
+  year: number,
+  opts: { includeArchived?: boolean; chatUsername?: string | null } = {},
+): { day: string; n: number }[] {
+  ensureDailyCountsFresh();
   const db = getDb();
-  const excl = excludedSubquery(opts);
-  return db.prepare(`
-    SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch', 'localtime') AS day, COUNT(*) AS n
-    FROM messages
-    WHERE strftime('%Y', timestamp, 'unixepoch', 'localtime') = ?
-      AND chat_username NOT IN ${excl}
-    GROUP BY day
-    ORDER BY day
-  `).all(String(year)) as { day: string; n: number }[];
+  // Chat-scoped path: no rollup, count per-day from messages directly. The
+  // year range scan + chat equality keeps this fast even for big chats.
+  if (opts.chatUsername) {
+    const yearStart = Math.floor(new Date(year, 0, 1, 0, 0, 0, 0).getTime() / 1000);
+    const yearEnd = Math.floor(new Date(year + 1, 0, 1, 0, 0, 0, 0).getTime() / 1000);
+    return db
+      .prepare(
+        `SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch', 'localtime') AS day,
+                COUNT(*) AS n
+         FROM messages
+         WHERE timestamp >= ? AND timestamp < ?
+           AND chat_username = ?
+         GROUP BY day
+         ORDER BY day`,
+      )
+      .all(yearStart, yearEnd, opts.chatUsername) as { day: string; n: number }[];
+  }
+  const col = opts.includeArchived ? "n_with_archived" : "n";
+  return db
+    .prepare(
+      `SELECT day, ${col} AS n FROM daily_counts
+       WHERE day >= ? AND day < ?
+       ORDER BY day`,
+    )
+    .all(`${year}-01-01`, `${year + 1}-01-01`) as { day: string; n: number }[];
 }
 
 export function getSessionDetail(username: string) {
@@ -645,7 +827,183 @@ export function restoreSessions(usernames: string[]) {
   return n;
 }
 
-export function backfillChatUsernames(): { messagesUpdated: number; urlsUpdated: number } {
+/**
+ * Rebuild the `daily_counts` rollup from scratch. Cheap on the current corpus
+ * (~3k days × one strftime), and a full rebuild is simpler & more correct
+ * than incremental updates when archive flips, me-handle changes, or
+ * back-dated indexing can shift any row.
+ *
+ * Called at the end of every indexing run.
+ */
+export function refreshDailyCounts(): { days: number } {
+  const db = getDb();
+  const handles = getMeHandles();
+  const meIn = handles.length
+    ? `IN (${handles.map(() => "?").join(",")})`
+    : `IN ('')`;
+  const excl = EXCLUDED_SUBQUERY;
+  const exclWithArchived = `(SELECT username FROM sessions WHERE chat_type IN ('official','folded'))`;
+  db.exec("DELETE FROM daily_counts");
+  const insert = db.prepare(
+    `INSERT INTO daily_counts (day, n, mine, n_with_archived, mine_with_archived)
+     VALUES (?, ?, ?, ?, ?)`,
+  );
+  const rows = db
+    .prepare(
+      `SELECT
+         strftime('%Y-%m-%d', timestamp, 'unixepoch', 'localtime') AS day,
+         SUM(CASE WHEN (chat_username IS NULL OR chat_username NOT IN ${excl}) THEN 1 ELSE 0 END) AS n,
+         SUM(CASE WHEN (chat_username IS NULL OR chat_username NOT IN ${excl}) AND sender ${meIn} THEN 1 ELSE 0 END) AS mine,
+         SUM(CASE WHEN (chat_username IS NULL OR chat_username NOT IN ${exclWithArchived}) THEN 1 ELSE 0 END) AS n_with_archived,
+         SUM(CASE WHEN (chat_username IS NULL OR chat_username NOT IN ${exclWithArchived}) AND sender ${meIn} THEN 1 ELSE 0 END) AS mine_with_archived
+       FROM messages
+       GROUP BY day`,
+    )
+    .all(...handles, ...handles) as {
+    day: string;
+    n: number;
+    mine: number;
+    n_with_archived: number;
+    mine_with_archived: number;
+  }[];
+  const tx = db.transaction(() => {
+    for (const r of rows) {
+      insert.run(r.day, r.n, r.mine, r.n_with_archived, r.mine_with_archived);
+    }
+  });
+  tx();
+  setMeta("daily_counts_refreshed_at", String(Date.now()));
+  return { days: rows.length };
+}
+
+export function ensureDailyCountsFresh(): boolean {
+  const v = getMeta("daily_counts_refreshed_at");
+  if (v) return false;
+  refreshDailyCounts();
+  return true;
+}
+
+/**
+ * Returned by `backfillChatUsernames` and surfaced on the Settings page.
+ * `messagesUnmatched` / `urlsUnmatched` are rows still NULL after the run —
+ * usually because the display name collides with multiple sessions (the
+ * backfill bails on ambiguous matches via HAVING COUNT(*) = 1).
+ */
+export interface BackfillResult {
+  messagesUpdated: number;
+  urlsUpdated: number;
+  messagesUnmatched: number;
+  urlsUnmatched: number;
+}
+
+export interface MessageRow {
+  id: number;
+  chat_username: string | null;
+  chat_display: string;
+  sender: string;
+  msg_type: string;
+  content: string;
+  timestamp: number;
+}
+
+export interface MessageContext {
+  target: MessageRow | null;
+  before: MessageRow[];
+  after: MessageRow[];
+  session: { username: string; display_name: string; chat_type: string } | null;
+}
+
+export function getMessageContext(
+  id: number,
+  opts: { before?: number; after?: number } = {},
+): MessageContext {
+  const db = getDb();
+  const beforeN = opts.before ?? 20;
+  const afterN = opts.after ?? 20;
+
+  const target = db
+    .prepare(
+      `SELECT id, chat_username, chat_display, sender, msg_type, content, timestamp
+       FROM messages WHERE id = ?`,
+    )
+    .get(id) as MessageRow | undefined;
+
+  if (!target) return { target: null, before: [], after: [], session: null };
+
+  // Some old rows have NULL chat_username (history pulled before backfill);
+  // fall back to chat_display so the permalink still shows neighbours.
+  const useUsername = target.chat_username !== null;
+  const scopeCol = useUsername ? "chat_username" : "chat_display";
+  const scopeVal = useUsername ? target.chat_username! : target.chat_display;
+
+  const beforeRows = db
+    .prepare(
+      `SELECT id, chat_username, chat_display, sender, msg_type, content, timestamp
+       FROM messages
+       WHERE ${scopeCol} = ? AND (timestamp < ? OR (timestamp = ? AND id < ?))
+       ORDER BY timestamp DESC, id DESC
+       LIMIT ?`,
+    )
+    .all(scopeVal, target.timestamp, target.timestamp, target.id, beforeN) as MessageRow[];
+
+  const afterRows = db
+    .prepare(
+      `SELECT id, chat_username, chat_display, sender, msg_type, content, timestamp
+       FROM messages
+       WHERE ${scopeCol} = ? AND (timestamp > ? OR (timestamp = ? AND id > ?))
+       ORDER BY timestamp ASC, id ASC
+       LIMIT ?`,
+    )
+    .all(scopeVal, target.timestamp, target.timestamp, target.id, afterN) as MessageRow[];
+
+  const session = target.chat_username
+    ? (db
+        .prepare(
+          `SELECT username, display_name, chat_type FROM sessions WHERE username = ?`,
+        )
+        .get(target.chat_username) as
+        | { username: string; display_name: string; chat_type: string }
+        | undefined) ?? null
+    : null;
+
+  return {
+    target,
+    before: beforeRows.reverse(),
+    after: afterRows,
+    session,
+  };
+}
+
+/**
+ * Mark a single URL (from `urls.id` / `urls_dedup.id`) as read. Idempotent —
+ * INSERT OR REPLACE refreshes `read_at` on a re-mark instead of duplicating.
+ */
+export function markUrlRead(urlId: number): void {
+  const db = getDb();
+  db.prepare(`INSERT OR REPLACE INTO read_urls(url_id, read_at) VALUES (?, ?)`).run(
+    urlId,
+    Date.now(),
+  );
+}
+
+/** Inverse of `markUrlRead`; no-op when the row isn't present. */
+export function markUrlUnread(urlId: number): void {
+  const db = getDb();
+  db.prepare(`DELETE FROM read_urls WHERE url_id = ?`).run(urlId);
+}
+
+/**
+ * All URL ids the user has marked read. Used by the reading queue to render
+ * the checkbox state and to filter. Small enough (< a few thousand expected)
+ * to materialise into a Set on each request.
+ */
+export function getReadUrlIds(): Set<number> {
+  const db = getDb();
+  const rows = db.prepare(`SELECT url_id FROM read_urls`).all() as { url_id: number }[];
+  return new Set(rows.map((r) => r.url_id));
+}
+
+export function backfillChatUsernames(): BackfillResult {
   const db = getDb();
   const r1 = db.prepare(`
     UPDATE messages
@@ -669,5 +1027,16 @@ export function backfillChatUsernames(): { messagesUpdated: number; urlsUpdated:
     WHERE chat_username IS NULL
       AND chat_display IS NOT NULL AND chat_display != ''
   `).run();
-  return { messagesUpdated: r1.changes, urlsUpdated: r2.changes };
+  const messagesUnmatched = (
+    db.prepare("SELECT COUNT(*) AS n FROM messages WHERE chat_username IS NULL").get() as { n: number }
+  ).n;
+  const urlsUnmatched = (
+    db.prepare("SELECT COUNT(*) AS n FROM urls WHERE chat_username IS NULL").get() as { n: number }
+  ).n;
+  return {
+    messagesUpdated: r1.changes,
+    urlsUpdated: r2.changes,
+    messagesUnmatched,
+    urlsUnmatched,
+  };
 }

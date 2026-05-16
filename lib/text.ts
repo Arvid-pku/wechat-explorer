@@ -48,10 +48,6 @@ export const STOPWORDS = new Set<string>([
   "查看", "点击", "打开", "分享", "wechat", "weixin",
 ]);
 
-const SINGLE_CHAR_KEEP = new Set<string>([
-  // single chars that are still meaningful as topic words
-]);
-
 /**
  * Tokenize a string into normalized lower-case tokens, dropping URLs,
  * emoji, punctuation, stopwords, and 1-char CJK tokens (most are filler).
@@ -69,8 +65,7 @@ export function tokenize(input: string): string[] {
     const norm = raw.toLowerCase();
     if (PUNCT_RE.test(norm) && norm.replace(PUNCT_RE, "") === "") continue;
     if (STOPWORDS.has(norm)) continue;
-    if (norm.length === 1 && !SINGLE_CHAR_KEEP.has(norm)) {
-      // single Latin char tokens are noise; single CJK chars are mostly particles
+    if (norm.length === 1) {
       if (/^[a-z0-9]$/.test(norm)) continue;
       if (/^[一-鿿]$/.test(norm)) continue;
     }

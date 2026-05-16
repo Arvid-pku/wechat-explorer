@@ -92,6 +92,11 @@ function ensureSchema(db: DB) {
     CREATE INDEX IF NOT EXISTS idx_urls_chat ON urls(chat_display);
     CREATE INDEX IF NOT EXISTS idx_urls_sender ON urls(sender);
     CREATE INDEX IF NOT EXISTS idx_urls_ts ON urls(timestamp DESC);
+    -- uniq_url_msg(content_hash, url) was the original dedup key but two
+    -- indexer paths (wx search --type link bulk vs per-chat wx history)
+    -- can produce different messages.content_hash for the same shared URL,
+    -- letting it sneak in twice. Migrations below add a real dedup_key
+    -- column with a unique index; this constraint is retained for back-compat.
     CREATE UNIQUE INDEX IF NOT EXISTS uniq_url_msg ON urls(content_hash, url);
 
     CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
@@ -144,6 +149,12 @@ function applyMigrations(db: DB) {
   if (!names.has("member_count_at")) {
     db.exec("ALTER TABLE sessions ADD COLUMN member_count_at INTEGER");
   }
+  if (!names.has("last_history_attempt_at")) {
+    db.exec("ALTER TABLE sessions ADD COLUMN last_history_attempt_at INTEGER");
+  }
+  if (!names.has("last_history_error")) {
+    db.exec("ALTER TABLE sessions ADD COLUMN last_history_error TEXT");
+  }
   db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_archived ON sessions(archived)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_urls_chat_username ON urls(chat_username) WHERE chat_username IS NOT NULL");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_chat_username ON messages(chat_username) WHERE chat_username IS NOT NULL");
@@ -162,20 +173,83 @@ function applyMigrations(db: DB) {
     CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_username);
   `);
 
-  // urls dedup view: same conceptual link can be inserted twice via different
-  // indexer paths (bulk \`wx search --type link\` vs per-chat \`wx history\`),
-  // each producing a different messages.content_hash and bypassing the URL
-  // unique index. This view picks one row per (url, ts, sender, chat).
+  // ── urls dedup: was a SELECT-time view (full table scan every read). Now
+  // a real `dedup_key` column with a unique index — duplicates are rejected
+  // at insert time. Migration: add column, backfill, drop historical dupes,
+  // create unique index, simplify the view to a trivial alias.
+  const urlCols = db.prepare("PRAGMA table_info(urls)").all() as { name: string }[];
+  const urlNames = new Set(urlCols.map((c) => c.name));
+  const dropOldViewFirst = !urlNames.has("dedup_key");
+  if (dropOldViewFirst) {
+    // The old `urls_dedup` view referenced `urls.*` — and SQLite freezes the
+    // column list at view-creation time. Dropping it before the ALTER TABLE
+    // avoids the "view references undefined columns" trap when we add the
+    // new column and recreate the view below.
+    db.exec(`DROP VIEW IF EXISTS urls_dedup`);
+    db.exec("ALTER TABLE urls ADD COLUMN dedup_key TEXT");
+    db.exec(
+      `UPDATE urls SET dedup_key =
+         url || char(31) || timestamp || char(31) || sender || char(31)
+              || COALESCE(chat_username, chat_display)
+       WHERE dedup_key IS NULL`,
+    );
+    // Drop historical duplicate rows (before the unique index existed).
+    db.exec(
+      `DELETE FROM urls WHERE id NOT IN (
+         SELECT MIN(id) FROM urls GROUP BY dedup_key
+       )`,
+    );
+  }
+  db.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS uniq_urls_dedup_key ON urls(dedup_key)`,
+  );
+
   db.exec(`DROP VIEW IF EXISTS urls_dedup`);
+  // Trivial alias kept for call-site compatibility. The unique index above
+  // guarantees one row per dedup_key going forward.
+  db.exec(`CREATE VIEW urls_dedup AS SELECT * FROM urls`);
+
+  // ── daily_counts: per-day rollup that powers /, /calendar heatmaps, and
+  // /surprises without scanning 614k messages on every page load. Refreshed
+  // by indexer.ts at the end of each indexing run via `refreshDailyCounts()`.
   db.exec(`
-    CREATE VIEW urls_dedup AS
-    SELECT *
-    FROM urls
-    WHERE id IN (
-      SELECT MIN(id)
-      FROM urls
-      GROUP BY url, timestamp, sender, COALESCE(chat_username, chat_display)
-    )
+    CREATE TABLE IF NOT EXISTS daily_counts (
+      day TEXT PRIMARY KEY,        -- 'YYYY-MM-DD' local time
+      n INTEGER NOT NULL,          -- post-exclusion message count
+      mine INTEGER NOT NULL DEFAULT 0,
+      n_with_archived INTEGER NOT NULL,  -- same count but only excluding official/folded
+      mine_with_archived INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_daily_counts_day ON daily_counts(day);
+  `);
+
+  // ── read_urls: per-URL read state for the /reading queue. Keyed by the
+  // stable `urls.id`; populated client-side from a "mark read" checkbox.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS read_urls (
+      url_id INTEGER PRIMARY KEY,
+      read_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_read_urls_read_at ON read_urls(read_at DESC);
+  `);
+
+  // ── query_cache: durable JSON cache for expensive aggregates (recap,
+  // me-stats, year keywords, etc). Invalidation is epoch-based, not TTL:
+  // each cached row records the `cache_epoch_index` + `cache_epoch_archive`
+  // it was computed under. Indexing bumps the index epoch; archive ops bump
+  // the archive epoch. A cached value stays valid until one of those changes.
+  // Past-year recaps therefore stay cached indefinitely after the first hit.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS query_cache (
+      cache_key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      epoch_index INTEGER NOT NULL,
+      epoch_archive INTEGER NOT NULL,
+      computed_at INTEGER NOT NULL,
+      hits INTEGER NOT NULL DEFAULT 0,
+      size_bytes INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_query_cache_computed ON query_cache(computed_at DESC);
   `);
 }
 
