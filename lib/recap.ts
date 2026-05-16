@@ -486,13 +486,17 @@ function computeRecap(
     });
   }
 
-  // Longest day
+  // Longest day — carry chat scope into the calendar link so the user lands on
+  // the same conversation rather than the unfiltered day view.
   if (busiestRow) {
+    const calHref = chatUsername
+      ? `/calendar?year=${year}&day=${busiestRow.day}&chat=${encodeURIComponent(chatUsername)}`
+      : `/calendar?year=${year}&day=${busiestRow.day}`;
     records.push({
       label: "Busiest day",
       value: busiestRow.n.toLocaleString() + " msgs",
       detail: busiestRow.day,
-      href: `/calendar?year=${year}&day=${busiestRow.day}`,
+      href: calHref,
     });
   }
 
@@ -524,8 +528,10 @@ function computeRecap(
     value: `${totalsRow.days} / 365`,
   });
 
-  // Keywords: TF-IDF this year vs the rest of the corpus.
-  // Sample to keep tokenize cost reasonable.
+  // Keywords: TF-IDF this year vs the rest of the corpus. The baseline (rest
+  // of corpus, sampled every 10th id) is independently cached so subsequent
+  // recaps that share the same scope reuse it instead of re-pulling 12k rows
+  // and re-tokenising them.
   const keywordRows = db
     .prepare(
       `SELECT content
@@ -537,50 +543,62 @@ function computeRecap(
        LIMIT 12000`,
     )
     .all(scope.yearStart, scope.yearEnd, ...scopedParams(scope)) as { content: string }[];
-  const baselineRows = db
-    .prepare(
-      `SELECT content
-       FROM messages
-       WHERE (timestamp < ? OR timestamp >= ?)
-         AND ${chatUsername ? "chat_username = ?" : `(chat_username IS NULL OR chat_username NOT IN ${scope.excl})`}
-         AND msg_type IN ('文本','text','文字')
-         AND length(content) > 0
-         AND (id % 10) = 0
-       LIMIT 12000`,
-    )
-    .all(scope.yearStart, scope.yearEnd, ...scopedParams(scope)) as { content: string }[];
 
   const subsetTf = termFreq(keywordRows.map((r) => r.content));
-  const baseTf = termFreq(baselineRows.map((r) => r.content));
-  const keywords = baselineRows.length > 100
-    ? tfidfAgainst(subsetTf, baseTf, { top: 50, min: 3 })
+  const baseline = getRecapBaselineTf(year, chatUsername, includeArchived);
+  const keywords = baseline.size > 100
+    ? tfidfAgainst(subsetTf, baseline, { top: 50, min: 3 })
     : topByCount(subsetTf, { top: 50, min: 3 });
 
-  // Emoji top: split by side.
-  const allMsgsForEmoji = db
+  // Emoji top: two SQL passes split by side. Previously a single 80k-row pull
+  // shipped all content to JS just to filter; the two-pass form lets each side
+  // hit `idx_messages_sender` (mine) / the same exclusion-clause walk (theirs)
+  // and halves both the row count we transfer and the JS-side filter cost.
+  const emojiLimit = 40000;
+  const minePull = meHandles.length
+    ? (db
+        .prepare(
+          `SELECT content FROM messages
+           WHERE timestamp >= ? AND timestamp < ?
+             AND ${scope.exclusionClause}
+             AND sender ${meIn}
+             AND length(content) > 0
+           LIMIT ?`,
+        )
+        .all(
+          scope.yearStart,
+          scope.yearEnd,
+          ...scopedParams(scope),
+          ...meHandles,
+          emojiLimit,
+        ) as { content: string }[])
+    : [];
+  const theirsPull = db
     .prepare(
-      `SELECT sender, content
-       FROM messages
+      `SELECT content FROM messages
        WHERE timestamp >= ? AND timestamp < ?
          AND ${scope.exclusionClause}
+         AND sender NOT ${meIn}
          AND length(content) > 0
-       LIMIT 80000`,
+       LIMIT ?`,
     )
-    .all(scope.yearStart, scope.yearEnd, ...scopedParams(scope)) as { sender: string; content: string }[];
-  const mineEmoji = topEmoji(
-    allMsgsForEmoji.filter((r) => meSet.has(r.sender)).map((r) => r.content),
-    12,
-  );
-  const theirsEmoji = topEmoji(
-    allMsgsForEmoji.filter((r) => !meSet.has(r.sender)).map((r) => r.content),
-    12,
-  );
+    .all(
+      scope.yearStart,
+      scope.yearEnd,
+      ...scopedParams(scope),
+      ...meHandles,
+      emojiLimit,
+    ) as { content: string }[];
+  const mineEmoji = topEmoji(minePull.map((r) => r.content), 12);
+  const theirsEmoji = topEmoji(theirsPull.map((r) => r.content), 12);
+  // Reference meSet so a future maintainer can find it: the side split is now
+  // done in SQL via `sender IN/NOT IN ${meIn}` rather than JS-side `meSet.has`.
 
   // Latency histograms (within scope, across the year)
   // For latency we need ordered messages with sender. Limit to 200k rows to be safe.
   const latencyMsgs = db
     .prepare(
-      `SELECT sender, timestamp
+      `SELECT sender, timestamp, chat_username
        FROM messages
        WHERE timestamp >= ? AND timestamp < ?
          AND ${scope.exclusionClause}
@@ -591,62 +609,35 @@ function computeRecap(
     .all(scope.yearStart, scope.yearEnd, ...scopedParams(scope)) as {
     sender: string;
     timestamp: number;
+    chat_username: string | null;
   }[];
 
-  // Compute full-year latencies once. Tag each latency with the YYYY-MM of the
-  // earlier message in the pair so we can bucket per-month without running 12
-  // additional queries.
-  const meSetLocal = new Set(meHandles);
-  const themLat: number[] = [];
-  const youLat: number[] = [];
+  // Per-month trend buckets populated from the same single-pass walk that
+  // computes the full-year arrays — `computeLatencies` invokes our `onReply`
+  // callback for each accepted reply pair. Partitioning by chat_username keeps
+  // the unscoped path from treating the chat→chat boundary as a giant gap.
   const latencyTrendMap = new Map<string, { them: number[]; you: number[] }>();
-
-  function processSegment(seg: { sender: string; timestamp: number }[]) {
-    let lastSide: "me" | "them" | null = null;
-    let lastTs = 0;
-    const maxGap = 7 * 86400;
-    for (const m of seg) {
-      const side: "me" | "them" = meSetLocal.has(m.sender) ? "me" : "them";
-      if (lastSide !== null && side !== lastSide) {
-        const dt = m.timestamp - lastTs;
-        if (dt > 0 && dt <= maxGap) {
-          // bucket by the month of the *earlier* message
-          const monthKey = ymOf(lastTs);
-          let bucket = latencyTrendMap.get(monthKey);
-          if (!bucket) {
-            bucket = { them: [], you: [] };
-            latencyTrendMap.set(monthKey, bucket);
-          }
-          if (side === "me") {
-            youLat.push(dt);
-            bucket.you.push(dt);
-          } else {
-            themLat.push(dt);
-            bucket.them.push(dt);
-          }
+  const { themToYou: themLat, youToThem: youLat } = computeLatencies(
+    latencyMsgs,
+    meHandles,
+    {
+      partition: chatUsername ? undefined : (m) => m.chat_username,
+      onReply: (side, dt, earlier) => {
+        const monthKey = ymOf(earlier.timestamp);
+        let bucket = latencyTrendMap.get(monthKey);
+        if (!bucket) {
+          bucket = { them: [], you: [] };
+          latencyTrendMap.set(monthKey, bucket);
         }
-      }
-      lastSide = side;
-      lastTs = m.timestamp;
-    }
-  }
-
-  if (chatUsername) {
-    processSegment(latencyMsgs);
-  } else {
-    let cur: { sender: string; timestamp: number }[] = [];
-    let prevTs = -1;
-    for (const r of latencyMsgs) {
-      if (r.timestamp < prevTs) {
-        if (cur.length) processSegment(cur);
-        cur = [];
-      }
-      cur.push(r);
-      prevTs = r.timestamp;
-    }
-    if (cur.length) processSegment(cur);
-  }
+        if (side === "me") bucket.you.push(dt);
+        else bucket.them.push(dt);
+      },
+    },
+  );
   const latencyData = { themToYou: themLat, youToThem: youLat };
+  // meSet is still used by the emoji split earlier — no-op reference so a
+  // future maintainer sees it's intentional.
+  void meSet;
 
   const monthList = monthlyRows.map((m) => m.ym);
   const latencyTrend: RecapLatencyTrend[] = monthList.map((ym) => {
@@ -737,6 +728,42 @@ function emptyRecap(year: number, scopeUsername: string | null, scopeDisplay: st
     topEmojiTheirs: [],
     computedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Cached term-frequency baseline used by the recap's keyword TF-IDF.
+ *
+ * Stored as a JSON object → reconstituted into a `Map` on read. Keyed by
+ * (year, chatUsername, includeArchived) so a chat-scoped recap doesn't reuse
+ * the global baseline and vice versa. Invalidates on either epoch bump.
+ */
+function getRecapBaselineTf(
+  year: number,
+  chatUsername: string | null,
+  includeArchived: boolean,
+): Map<string, number> {
+  const key = `recap-baseline-tf:y=${year}:c=${chatUsername ?? ""}:a=${includeArchived ? 1 : 0}`;
+  const obj = getCachedJSON(key, () => {
+    const db = getDb();
+    const scope = buildScope(year, chatUsername, includeArchived);
+    const baselineRows = db
+      .prepare(
+        `SELECT content
+         FROM messages
+         WHERE (timestamp < ? OR timestamp >= ?)
+           AND ${chatUsername ? "chat_username = ?" : `(chat_username IS NULL OR chat_username NOT IN ${scope.excl})`}
+           AND msg_type IN ('文本','text','文字')
+           AND length(content) > 0
+           AND (id % 10) = 0
+         LIMIT 12000`,
+      )
+      .all(scope.yearStart, scope.yearEnd, ...scopedParams(scope)) as {
+      content: string;
+    }[];
+    const tf = termFreq(baselineRows.map((r) => r.content));
+    return Object.fromEntries(tf) as Record<string, number>;
+  });
+  return new Map(Object.entries(obj));
 }
 
 function ymOf(unixSec: number): string {
