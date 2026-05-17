@@ -22,7 +22,7 @@ export async function GET(request: Request) {
     else chat = chatParam;
   }
   const includeArchived = searchParams.get("archived") === "1";
-  const limit = Math.min(200, parseInt(searchParams.get("limit") ?? "50", 10));
+  const limit = Math.min(200, Number.parseInt(searchParams.get("limit") ?? "50", 10) || 50);
 
   if (!q) return NextResponse.json({ results: [] });
 
