@@ -26,10 +26,18 @@ mac:
   icon: build/icon.icns
   # Universal target → one .app that runs on both Apple Silicon and Intel.
   # The native better-sqlite3 binding is fused via `lipo` in build-app.sh
-  # before electron-builder runs. Set arch to a single-arch list (e.g.
-  # `["arm64"]`) to skip the cross-build if you only need one slice.
+  # before electron-builder runs.
+  #
+  # Both `dir` (raw .app under release/mac-universal/) and `dmg` (drag-to-
+  # /Applications installer at release/<name>-universal.dmg) are always
+  # built — dmg adds ~30s and is what end users actually click. To skip
+  # dmg for fast iteration, edit this list locally (don't commit) or
+  # use `npm run app:dev` which doesn't touch electron-builder at all.
   target:
     - target: dir
+      arch:
+        - universal
+    - target: dmg
       arch:
         - universal
   # No code signing for self-distribution. Users will need to allow the app

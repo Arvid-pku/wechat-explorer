@@ -1,0 +1,103 @@
+name: Release .app
+
+# Fires on every `v*` tag push. Builds the universal macOS .app + .dmg
+# and attaches them to a GitHub Release matching the tag. The release is
+# created in draft state — flip to published once you've smoke-tested the
+# binary by downloading it.
+#
+# To cut a release locally:
+#   git tag v0.2.0 && git push origin v0.2.0
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # needed to create the GitHub Release
+
+jobs:
+  build-mac:
+    runs-on: macos-14   # Apple Silicon runner; cross-builds x64 via prebuilt binaries
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'   # match Electron 38's bundled Node
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build universal .app + .dmg
+        run: bash scripts/build-app.sh
+
+      - name: Zip the .app
+        run: |
+          cd release/mac-universal
+          zip -ry "../WeChat-Explorer-${GITHUB_REF_NAME#v}-mac-universal.zip" "WeChat Explorer.app"
+
+      - name: Compose release notes
+        run: |
+          cat > /tmp/notes.md <<'EOF'
+          # WeChat Explorer ${{ github.ref_name }}
+
+          A local-first explorer for your own WeChat history — search, count, chart, and re-read a decade of chats without any of it leaving your machine.
+
+          ## Download
+
+          - **`*.dmg`** — drag-to-/Applications installer (recommended)
+          - **`*-mac-universal.zip`** — the raw `.app` if you prefer zip
+
+          Both are universal binaries: arm64 + x86_64.
+
+          ## Install
+
+          1. Download the `.dmg`, open it, drag **WeChat Explorer** into `/Applications`.
+          2. First launch: **right-click → Open** (or **Settings → Privacy & Security → "Open Anyway"**). The bundle is unsigned, so macOS Gatekeeper would otherwise block it.
+
+          After that, double-click any time.
+
+          ## First-run setup
+
+          The app needs [`wx-cli`](https://github.com/jackwener/wx-cli) — the bridge that decrypts WeChat's local databases. **The bundled first-run wizard installs and initialises it for you** with one-click buttons:
+
+          1. Install wx-cli via Homebrew (no sudo).
+          2. Re-sign `/Applications/WeChat.app` (macOS password dialog).
+          3. Run `wx init` (macOS password dialog).
+          4. Build the first index (~20 s).
+
+          ## Privacy
+
+          - No LLM, no cloud sync, no telemetry, no auto-update pinger.
+          - Bound to `127.0.0.1` — never talks to anything outside your machine.
+          - HTML export per page renders charts as inline SVG (offline-friendly).
+
+          ## Known limits
+
+          - **Unsigned** — right-click → Open on first launch.
+          - **macOS only** — wx-cli is currently macOS-only.
+
+          Sources: <https://github.com/${{ github.repository }}>
+          EOF
+
+      - name: Create draft GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Find the produced artefacts (electron-builder names them
+          # `WeChat Explorer-<version>-arch.dmg` etc.)
+          DMG=$(ls release/*.dmg | head -1)
+          ZIP=$(ls release/*.zip | head -1)
+          gh release create "$GITHUB_REF_NAME" \
+            --draft \
+            --title "WeChat Explorer $GITHUB_REF_NAME" \
+            --notes-file /tmp/notes.md \
+            "$DMG" \
+            "$ZIP"

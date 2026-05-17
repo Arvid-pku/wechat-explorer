@@ -104,14 +104,12 @@ ok "  → copied universal binding into standalone"
 
 # ── 4. pack with electron-builder ──────────────────────────────────────
 step "Packaging .app with electron-builder"
-# `--mac` alone (no target arg) tells electron-builder to use the target list
-# from the YAML config — which already specifies arch:universal. Passing
-# `--mac dir` would override the YAML and drop the universal arch.
-EB_FLAGS=("--mac")
-if (( BUILD_DMG )); then
-  EB_FLAGS+=("--config.mac.target.0.target=dir" "--config.mac.target.1.target=dmg")
-fi
-npx electron-builder --config electron-builder.yml "${EB_FLAGS[@]}"
+# `--mac` alone uses the YAML's target list, which now includes both
+# `dir` (the raw .app) and `dmg`. Building both takes only ~30 s extra
+# over dir-only, and dmg is what most users actually click. The legacy
+# --dmg flag on this script is kept as a no-op so older invocations
+# don't break (it's now the default behaviour either way).
+npx electron-builder --config electron-builder.yml --mac
 
 # ── 5. inject the Next.js standalone bundle into the .app ──────────────
 # electron-builder's extraResources copy strips `node_modules/` no matter
