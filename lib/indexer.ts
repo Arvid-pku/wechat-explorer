@@ -12,18 +12,18 @@ import { extractUrls, toExtracted } from "./url-parser";
 import { backfillChatUsernames, refreshDailyCounts } from "./queries";
 import { invalidateRecapCache } from "./recap";
 import { invalidateCalendarCaches } from "./queries.calendar";
-import { invalidateContactBaseline } from "./queries.contact";
 import { bumpIndexEpoch } from "./cache";
 
 /**
  * Drop every in-process cache + bump the persistent cache's index epoch so
  * cross-process / cross-restart cached rows in `query_cache` are also
- * invalidated. Called at the end of every indexing run.
+ * invalidated. Called at the end of every indexing run. The contact TF-IDF
+ * baseline used to need a manual invalidation hook here, but it now lives
+ * in `query_cache` and the epoch bump below invalidates it for free.
  */
 function invalidateAllCaches() {
   invalidateRecapCache();
   invalidateCalendarCaches();
-  invalidateContactBaseline();
   bumpIndexEpoch();
 }
 
@@ -187,14 +187,11 @@ export async function indexHistoryForSession(
     if (batch.length < HISTORY_BATCH_LIMIT) break;
   }
 
-  // Cap-hit detection: full page cap reached AND last page was a full
-  // batch → there's almost certainly more history we didn't fetch.
-  // Surface it via `last_history_error` so the user can rerun.
-  const hitCap =
-    totalIngested >= maxMessages &&
-    // The check above just hit the for-loop cap; the inner `break` would
-    // also fire on a short batch but we'd have hit the page cap first.
-    totalIngested === HISTORY_BATCH_LIMIT * HISTORY_PAGES_PER_CHAT;
+  // Cap-hit detection: hit the caller's max AND that max equals the per-run
+  // page-cap (so the loop exhausted its pages, not the chat). Compare against
+  // `maxMessages` rather than the raw product so callers passing a smaller
+  // `maxMessagesPerChat` still get a correct cap-hit signal.
+  const hitCap = totalIngested >= maxMessages && totalIngested === maxMessages;
   const capNote = hitCap
     ? `hit ${maxMessages.toLocaleString()}-msg cap, rerun deep index to backfill older history`
     : null;
@@ -308,7 +305,16 @@ export async function runQuickIndex(onProgress: ProgressCb = () => {}): Promise<
   const rollup = refreshDailyCounts();
   onProgress({ stage: "rollups:done", detail: `${rollup.days} days` });
   // Keep query planner's stats in sync after big inserts.
-  try { getDb().exec("ANALYZE"); } catch {}
+  try {
+    getDb().exec("ANALYZE");
+  } catch (err) {
+    onProgress({ stage: "analyze:error", detail: (err as Error).message });
+  }
+  // Truncate the WAL so it doesn't grow unbounded across many quick-index
+  // runs. Errors here are non-fatal — the next checkpoint will catch up.
+  try {
+    getDb().pragma("wal_checkpoint(TRUNCATE)");
+  } catch {}
   invalidateAllCaches();
   setMeta("last_quick_index_at", String(Date.now()));
   return { sessions, contacts, links, elapsedMs: Date.now() - start };
@@ -369,7 +375,22 @@ export async function runDeepIndex(opts: IndexDeepOptions = {}, onProgress: Prog
   onProgress({ stage: "rollups:start" });
   const rollup = refreshDailyCounts();
   onProgress({ stage: "rollups:done", detail: `${rollup.days} days` });
-  try { getDb().exec("ANALYZE"); } catch {}
+  try {
+    getDb().exec("ANALYZE");
+  } catch (err) {
+    onProgress({ stage: "analyze:error", detail: (err as Error).message });
+  }
+  // Compact the FTS5 index — heavy deep runs can leave the trigram index
+  // bloated with overlapping segments. `optimize` merges them in place; cheap
+  // compared to `rebuild` and worth the few seconds at the end of a deep run.
+  try {
+    getDb().exec("INSERT INTO messages_fts(messages_fts) VALUES('optimize')");
+  } catch (err) {
+    onProgress({ stage: "fts-optimize:error", detail: (err as Error).message });
+  }
+  try {
+    getDb().pragma("wal_checkpoint(TRUNCATE)");
+  } catch {}
   invalidateAllCaches();
   setMeta("last_deep_index_at", String(Date.now()));
   return { sessionsProcessed: done };

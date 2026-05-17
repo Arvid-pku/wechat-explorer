@@ -19,6 +19,7 @@
  * any epoch bump in this process and stays correct across other processes
  * because they re-check epochs on their own reads.
  */
+import type Database from "better-sqlite3";
 import { getDb, getMeta, setMeta } from "./db";
 
 const INDEX_EPOCH_KEY = "cache_epoch_index";
@@ -44,6 +45,35 @@ function bumpEpoch(key: string): number {
   return next;
 }
 
+// Prepared statements cached at module scope. `better-sqlite3` only keeps a
+// tiny internal LRU; for hot paths (getCachedJSON fires several times per
+// page render) recompiling each call is ~0.1ms per call × N keys, enough to
+// show up in cold settings/me-stats profiles. The lazy helper rebinds on
+// first call against a live db (handle survives dev-server hot reloads via
+// the singleton in lib/db.ts).
+let _selectStmt: Database.Statement | null = null;
+let _upsertStmt: Database.Statement | null = null;
+function prepared() {
+  const db = getDb();
+  if (!_selectStmt) {
+    _selectStmt = db.prepare(
+      `SELECT value, epoch_index, epoch_archive FROM query_cache WHERE cache_key = ?`,
+    );
+    _upsertStmt = db.prepare(
+      `INSERT INTO query_cache (cache_key, value, epoch_index, epoch_archive, computed_at, hits, size_bytes)
+       VALUES (?, ?, ?, ?, ?, 0, ?)
+       ON CONFLICT(cache_key) DO UPDATE SET
+         value = excluded.value,
+         epoch_index = excluded.epoch_index,
+         epoch_archive = excluded.epoch_archive,
+         computed_at = excluded.computed_at,
+         hits = 0,
+         size_bytes = excluded.size_bytes`,
+    );
+  }
+  return { select: _selectStmt!, upsert: _upsertStmt! };
+}
+
 /** Called by the indexer at the end of a successful run. */
 export function bumpIndexEpoch(): number {
   return bumpEpoch(INDEX_EPOCH_KEY);
@@ -67,12 +97,16 @@ function memGet<T>(key: string, current: CacheEpochs): T | undefined {
     _memCache.delete(key);
     return undefined;
   }
+  // True LRU: re-insert so the most-recently-used key sits at the tail
+  // (`Map` iterates insertion order, so the oldest is at the head and gets
+  // evicted first in `memSet`).
+  _memCache.delete(key);
+  _memCache.set(key, hit as MemEntry<unknown>);
   return hit.value;
 }
 
 function memSet<T>(key: string, value: T, current: CacheEpochs) {
   if (_memCache.size >= MAX_MEM_ENTRIES) {
-    // Cheap LRU-ish: drop the oldest insertion-order entry.
     const first = _memCache.keys().next().value;
     if (first !== undefined) _memCache.delete(first);
   }
@@ -100,20 +134,16 @@ export function getCachedJSON<T>(
 ): T {
   const epochs = getCacheEpochs();
 
-  // L1: in-process map.
+  // L1: in-process map. No hit-count write — L1 hits dominate hot pages and
+  // counting each in SQLite defeats the whole point. The hits column only
+  // tracks L2 hits, which are the meaningful "did anyone re-render this
+  // aggregate" signal anyway.
   const memHit = memGet<T>(key, epochs);
-  if (memHit !== undefined) {
-    bumpHit(key); // async-fire (sync prepared statement — still cheap)
-    return memHit;
-  }
+  if (memHit !== undefined) return memHit;
 
   // L2: SQLite.
-  const db = getDb();
-  const row = db
-    .prepare(
-      `SELECT value, epoch_index, epoch_archive FROM query_cache WHERE cache_key = ?`,
-    )
-    .get(key) as
+  const { select, upsert } = prepared();
+  const row = select.get(key) as
     | { value: string; epoch_index: number; epoch_archive: number }
     | undefined;
   if (
@@ -126,41 +156,32 @@ export function getCachedJSON<T>(
       memSet(key, parsed, epochs);
       bumpHit(key);
       return parsed;
-    } catch {
-      // Bad JSON — fall through and recompute.
+    } catch (err) {
+      // Corrupted row — log once so we know it happened, then recompute.
+      console.warn(
+        `cache.ts: bad JSON for "${key}" (${row.value.length}B); recomputing.`,
+        err,
+      );
     }
   }
 
   // Miss → compute.
   const value = factory();
   const serialized = JSON.stringify(value);
-  db.prepare(
-    `INSERT INTO query_cache (cache_key, value, epoch_index, epoch_archive, computed_at, hits, size_bytes)
-     VALUES (?, ?, ?, ?, ?, 0, ?)
-     ON CONFLICT(cache_key) DO UPDATE SET
-       value = excluded.value,
-       epoch_index = excluded.epoch_index,
-       epoch_archive = excluded.epoch_archive,
-       computed_at = excluded.computed_at,
-       hits = 0,
-       size_bytes = excluded.size_bytes`,
-  ).run(
-    key,
-    serialized,
-    epochs.index,
-    epochs.archive,
-    Date.now(),
-    serialized.length,
-  );
+  upsert.run(key, serialized, epochs.index, epochs.archive, Date.now(), serialized.length);
   memSet(key, value, epochs);
   return value;
 }
 
+let _bumpHitStmt: Database.Statement | null = null;
 function bumpHit(key: string): void {
   try {
-    getDb()
-      .prepare(`UPDATE query_cache SET hits = hits + 1 WHERE cache_key = ?`)
-      .run(key);
+    if (!_bumpHitStmt) {
+      _bumpHitStmt = getDb().prepare(
+        `UPDATE query_cache SET hits = hits + 1 WHERE cache_key = ?`,
+      );
+    }
+    _bumpHitStmt.run(key);
   } catch {
     // Hit counter is observational; never let it fail a request.
   }

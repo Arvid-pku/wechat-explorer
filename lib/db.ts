@@ -12,6 +12,14 @@ const DB_PATH = join(APP_DIR, "index.db");
 type DB = Database.Database;
 let _db: DB | null = null;
 
+/**
+ * Schema version is bumped whenever an additive migration is added to
+ * `applyMigrations`. Stamped into `meta.schema_version` at the end of every
+ * `getDb()` so a downgrade (older binary, newer DB) can refuse to open
+ * instead of corrupting state. Migrations themselves remain additive-only.
+ */
+export const CURRENT_SCHEMA_VERSION = 1;
+
 export function getDb(): DB {
   if (_db) return _db;
   const db = new Database(DB_PATH);
@@ -21,6 +29,20 @@ export function getDb(): DB {
   db.pragma("temp_store = MEMORY");
   ensureSchema(db);
   applyMigrations(db);
+  // Forward-incompat check: if the DB was last touched by a newer binary it
+  // may reference columns we don't know about. Bail rather than crash mid-page.
+  const stamped = (db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as { value: string } | undefined)?.value;
+  const storedVersion = stamped ? Number(stamped) : 0;
+  if (storedVersion > CURRENT_SCHEMA_VERSION) {
+    throw new Error(
+      `Index DB schema version ${storedVersion} is newer than this binary expects (${CURRENT_SCHEMA_VERSION}). ` +
+        `Upgrade the app, or delete ${DB_PATH} and reindex.`,
+    );
+  }
+  db.prepare(
+    "INSERT INTO meta(key, value, updated_at) VALUES('schema_version', ?, ?) " +
+      "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+  ).run(String(CURRENT_SCHEMA_VERSION), Date.now());
   _db = db;
   return db;
 }
@@ -97,9 +119,10 @@ function ensureSchema(db: DB) {
     -- uniq_url_msg(content_hash, url) was the original dedup key but two
     -- indexer paths (wx search --type link bulk vs per-chat wx history)
     -- can produce different messages.content_hash for the same shared URL,
-    -- letting it sneak in twice. Migrations below add a real dedup_key
-    -- column with a unique index; this constraint is retained for back-compat.
-    CREATE UNIQUE INDEX IF NOT EXISTS uniq_url_msg ON urls(content_hash, url);
+    -- letting it sneak in twice. The newer dedup_key unique index added in
+    -- the migration block below now enforces uniqueness on the conceptual
+    -- (url, ts, sender, chat) tuple — this older index is redundant and is
+    -- dropped there.
 
     CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
       content,
@@ -222,6 +245,10 @@ function applyMigrations(db: DB) {
   // guarantees one row per dedup_key going forward.
   db.exec(`CREATE VIEW urls_dedup AS SELECT * FROM urls`);
 
+  // Drop the legacy `uniq_url_msg` index — superseded by `uniq_urls_dedup_key`.
+  // ~26 MB recovered on a ~90k-url DB. Non-destructive (index only, no data).
+  db.exec(`DROP INDEX IF EXISTS uniq_url_msg`);
+
   // ── daily_counts: per-day rollup that powers /, /calendar heatmaps, and
   // /surprises without scanning 614k messages on every page load. Refreshed
   // by indexer.ts at the end of each indexing run via `refreshDailyCounts()`.
@@ -266,21 +293,35 @@ function applyMigrations(db: DB) {
   `);
 }
 
-export function setMeta(key: string, value: string) {
+// Module-scope prepared statements for the meta key/value store. `getMeta`
+// is called twice per cache lookup (index epoch + archive epoch); recompiling
+// each time was a measurable chunk of warm-render latency.
+let _metaGetStmt: Database.Statement | null = null;
+let _metaSetStmt: Database.Statement | null = null;
+function metaStmts() {
   const db = getDb();
-  db.prepare(
-    "INSERT INTO meta(key, value, updated_at) VALUES(?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-  ).run(key, value, Date.now());
+  if (!_metaGetStmt) {
+    _metaGetStmt = db.prepare("SELECT value FROM meta WHERE key = ?");
+    _metaSetStmt = db.prepare(
+      "INSERT INTO meta(key, value, updated_at) VALUES(?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+    );
+  }
+  return { get: _metaGetStmt!, set: _metaSetStmt! };
+}
+
+export function setMeta(key: string, value: string) {
+  metaStmts().set.run(key, value, Date.now());
 }
 
 export function getMeta(key: string): string | null {
-  const db = getDb();
-  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as { value: string } | undefined;
+  const row = metaStmts().get.get(key) as { value: string } | undefined;
   return row?.value ?? null;
 }
 
 export function contentHash(parts: (string | number | null | undefined)[]): string {
   const h = createHash("sha256");
-  h.update(parts.map((p) => String(p ?? "")).join(""));
+  // Separator avoids ["abc","1","23"] colliding with ["a","bc1","23"]. \x1f is
+  // ASCII RS — won't appear in chat text or wx CLI output.
+  h.update(parts.map((p) => String(p ?? "")).join("\x1f"));
   return h.digest("hex");
 }

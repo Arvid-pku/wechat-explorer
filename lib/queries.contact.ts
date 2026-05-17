@@ -19,37 +19,37 @@ import { getCachedJSON } from "./cache";
 
 export const RECENT_TOKEN_LIMIT = 5000;
 export const BASELINE_SAMPLE = 20_000;
-const BASELINE_TTL_MS = 24 * 60 * 60 * 1000;
 
 /* ---------- baseline cache for TF-IDF ---------- */
 
-let _baselineCache: { tf: Map<string, number>; ts: number } | null = null;
-
-/** Reset the TF-IDF baseline cache — called from the indexer post-run. */
-export function invalidateContactBaseline(): void {
-  _baselineCache = null;
-}
-
 /**
  * Get (and cache) the global token baseline. Uses a 20k random text-message
- * sample across the index. Refreshed every 24h, lazily.
+ * sample across the index. Cached in `query_cache` and invalidated via the
+ * index epoch — so a fresh `runQuickIndex` / `runDeepIndex` automatically
+ * recomputes it, with no TTL needed. `{ignoreArchive: true}` because archive
+ * flips don't meaningfully shift the global token mix.
+ *
+ * Stored on disk as a [token, count][] array because JSON can't roundtrip a
+ * `Map`. Rehydration is O(N) — cheap at ~20k tokens.
  */
 export function getGlobalTokenBaseline(): Map<string, number> {
-  if (_baselineCache && Date.now() - _baselineCache.ts < BASELINE_TTL_MS) {
-    return _baselineCache.tf;
-  }
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT content FROM messages
-       WHERE msg_type = '文本' AND content IS NOT NULL AND length(content) > 1
-       ORDER BY RANDOM()
-       LIMIT ?`,
-    )
-    .all(BASELINE_SAMPLE) as { content: string }[];
-  const tf = termFreq(rows.map((r) => r.content));
-  _baselineCache = { tf, ts: Date.now() };
-  return tf;
+  const pairs = getCachedJSON<[string, number][]>(
+    "global-token-baseline",
+    () => {
+      const db = getDb();
+      const rows = db
+        .prepare(
+          `SELECT content FROM messages
+           WHERE msg_type = '文本' AND content IS NOT NULL AND length(content) > 1
+           ORDER BY RANDOM()
+           LIMIT ?`,
+        )
+        .all(BASELINE_SAMPLE) as { content: string }[];
+      return Array.from(termFreq(rows.map((r) => r.content)).entries());
+    },
+    { ignoreArchive: true },
+  );
+  return new Map(pairs);
 }
 
 /* ---------- types ---------- */
