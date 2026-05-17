@@ -13,6 +13,7 @@ import {
 import { format, parseISO } from "date-fns";
 import { EXPORT_CHART_WIDTH, useExportMode } from "@/components/export-mode";
 import { ServerLines } from "@/lib/server-charts";
+import { TOOLTIP_STYLE } from "@/components/charts/stats/_shared";
 
 interface Props {
   data: { day: string; n: number }[];
@@ -46,13 +47,7 @@ export function ActivityChart({ data }: Props) {
         width={36}
       />
       <Tooltip
-        contentStyle={{
-          background: "var(--color-popover)",
-          border: "1px solid var(--color-border)",
-          borderRadius: 6,
-          fontSize: 12,
-          color: "var(--color-foreground)",
-        }}
+        contentStyle={TOOLTIP_STYLE}
         labelFormatter={(v) => format(parseISO(String(v)), "EEE, MMM d, yyyy")}
         formatter={(v, name) => [Math.round(Number(v)).toLocaleString(), name === "rolling" ? "7-day avg" : "messages"]}
       />

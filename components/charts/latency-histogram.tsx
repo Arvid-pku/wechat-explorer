@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import { EXPORT_CHART_WIDTH, useExportMode } from "@/components/export-mode";
 import { ServerHorizontalBars } from "@/lib/server-charts";
+import { TOOLTIP_STYLE } from "@/components/charts/stats/_shared";
 
 interface Props {
   data: { label: string; n: number }[];
@@ -38,13 +39,7 @@ export function LatencyHistogram({ data, tone }: Props) {
         width={32}
       />
       <Tooltip
-        contentStyle={{
-          background: "var(--color-popover)",
-          border: "1px solid var(--color-border)",
-          borderRadius: 6,
-          fontSize: 12,
-          color: "var(--color-foreground)",
-        }}
+        contentStyle={TOOLTIP_STYLE}
         cursor={{ fill: "var(--color-accent)", fillOpacity: 0.4 }}
         formatter={(v) => [`${v} replies`, ""]}
       />

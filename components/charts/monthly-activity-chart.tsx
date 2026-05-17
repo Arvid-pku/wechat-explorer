@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { EXPORT_CHART_WIDTH, useExportMode } from "@/components/export-mode";
 import { ServerBars } from "@/lib/server-charts";
+import { TOOLTIP_STYLE } from "@/components/charts/stats/_shared";
 
 interface Props {
   data: { ym: string; mine: number; theirs: number }[];
@@ -37,13 +38,7 @@ export function MonthlyActivityChart({ data }: Props) {
         width={36}
       />
       <Tooltip
-        contentStyle={{
-          background: "var(--color-popover)",
-          border: "1px solid var(--color-border)",
-          borderRadius: 6,
-          fontSize: 12,
-          color: "var(--color-foreground)",
-        }}
+        contentStyle={TOOLTIP_STYLE}
         cursor={{ fill: "var(--color-accent)", fillOpacity: 0.4 }}
       />
       <Legend
