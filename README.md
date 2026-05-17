@@ -14,11 +14,13 @@ index, and renders it as a polished web app — never leaves your machine.
 | Web runtime | **Node** (via `next dev` / `next start`) |
 | Script runtime | **Bun + tsx** (indexer scripts run on either) |
 | Framework | Next.js 16 (App Router, Turbopack) |
-| UI | Tailwind CSS v4 + shadcn/ui |
+| UI | Tailwind CSS v4 + shadcn/ui (over `@base-ui/react`) |
 | State | Tanstack Query + Tanstack Table |
-| Charts | Recharts (line/area) + custom SVG (heatmap) |
+| Charts | Recharts on the live page; pure-SVG primitives (`lib/server-charts.tsx`) on the HTML export + per-page server-SVG components (heatmap, sparkline, recap charts) |
 | Search | SQLite FTS5 + trigram tokenizer (CJK friendly) |
 | Storage | SQLite via `better-sqlite3` at `~/.wechat-explorer/index.db` |
+| i18n | EN / 中文 toggle backed by a `we-locale` cookie; flat dictionary in `lib/i18n.ts` |
+| Export | One-click HTML export per page via `/api/export/page` + a bespoke recap renderer |
 
 > **Why Node, not Bun, for the web server:** `bun --bun next dev` on Next.js 16 + Turbopack leaks Node postcss workers (seen 2,000+ orphans in a single session). Switching the web tier to Node fixes the leak. Indexer scripts still run via Node + tsx (Bun doesn't yet support better-sqlite3's native bindings — tracked in oven-sh/bun#4290).
 
@@ -72,92 +74,117 @@ You can also trigger either mode from **Settings → Reindex** inside the app.
 
 ## Pages
 
-- **Overview** (`/`) — totals (each card links to a `/stats/<topic>` drilldown), 365-day activity with 7-day rolling average, message-type breakdown, top link sources, surprises panel (the slowest panel is split into its own Suspense boundary so the rest streams in immediately).
-- **You** (`/me`) — personal-perspective dashboard: hero (your sends / active days / peak hour / median reply), `Week / Month / Year` aggregation line chart of you vs them over time, per-weekday + 24-hour activity, voice fingerprint (avg chars / emoji / link rate / voice / image / sticker / top emoji), top-5 multi-line series for private chats + groups (+ collapsed full top-10 list), your topic TF-IDF, reply-latency histograms, links you share, "shouting into the void" chats, longest essays, busiest single minute.
+- **Overview** (`/`) — totals (each card links to a `/stats/<topic>` drilldown), 365-day activity with 7-day rolling average, message-type breakdown, top link sources, surprises panel (Suspense-streamed). The "Indexed messages" stat card shows a 30-day vs prior-30-day delta from `daily_counts`.
+- **You** (`/me`) — personal-perspective dashboard with URL-driven controls (`agg=week|month|year`, `split=1` to break "them" into private vs groups, `topN=3|5|10`, `topRange=all|1y|6m|3m`). Hero strip, YoY-vs-prior-365d card, activity line chart, hour-of-day + weekday, voice fingerprint, **2×2 top-chats grid** (who you message most / who messages you most × private / groups), topic TF-IDF, reply-latency histograms, links you share, "shouting into the void", longest essays, busiest single minute, and a Suspense-streamed **"Did you know"** panel with ~20 personality records (busiest day, most lopsided 1:1, longest reunion gap, distinct people seen, …).
 - **Contacts** (`/contacts`) — Notion-style table: each column header is a popover with sort + per-column filters (name search, type filter, active/archived/all view). All filters carry in the URL as searchParams. Counts that hit the indexer cap show an amber ⚠ with a "rerun deep index" tooltip.
-- **Contact detail** (`/contacts/[username]`) — monthly bars, hourly grid, reply latency histograms, style fingerprint, topic word cloud, vocab diff, top senders (groups), shared content, recent 50 messages. **Every sub-link carries `?chat=<username>`** so Calendar / Search / Links / message permalinks open scoped to this chat.
+- **Contact detail** (`/contacts/[username]`) — header + back link + archive button paint immediately; the analytics body (monthly bars, hourly grid, reply latency, style fingerprint, topic word cloud, vocab diff, top senders, shared content, recent 50 messages) streams in via `<Suspense>`. **Every sub-link carries `?chat=<username>`** so Calendar / Search / Links / message permalinks open scoped to this chat.
 - **Links** (`/links`) — domain-group grid; per-group page has faceted view + CSV/JSON export + sender/chat filters. Honours `?chat=<username>` for chat-scoped link drill-downs.
 - **Search** (`/search`) — FTS5 trigram tokeniser; 2-char CJK queries fall back to LIKE; multi-token AND-LIKE for queries where any token is short. HTML in snippets is escaped (no FTS5 `snippet()` raw passthrough). Reads `?chat=` to scope to one session and renders a "Filtered to chat" pill.
-- **Calendar** (`/calendar`) — year heatmap; day-detail with hourly heatmap, TF-IDF keyword cloud, on-this-day, per-chat collapsible groups. Honours `?chat=` to scope every panel (heatmap, day detail, on-this-day, year keywords) to a single conversation.
-- **Reading queue** (`/reading`) — long-form links (公众号 / 小红书 / 知乎 / Medium / Substack) latest first, with persisted read state (checkbox; stored in the `read_urls` table) and an All / Unread / Read filter.
-- **Message permalink** (`/messages/[id]`) — single message with ±20 lines of surrounding context. Search results' timestamps link here.
-- **Recap** (`/recap/[year]` and `/recap/[year]/[chat_username]`) — Spotify-Wrapped-style year-in-review with monthly bars, hourly grid, top contacts/groups/domains, records, word cloud, latency, new contacts, first/last message, year-over-year diff, top emoji. `/api/recap/[year]/export` produces a self-contained HTML download.
+- **Calendar** (`/calendar`) — year heatmap; day-detail with hourly heatmap, TF-IDF keyword cloud, on-this-day, per-chat collapsible groups. Every panel cached. Honours `?chat=` to scope every panel to a single conversation.
+- **Reading queue** (`/reading`) — long-form links (公众号 / 小红书 / 知乎 / Medium / Substack). **Deduped by URL** via a window-function CTE — the same article forwarded in N chats shows once with a "shared N×" badge. 100/page pagination. `mp.weixin.qq.com/mp/waerrpage` (WeChat's "content unavailable" placeholder) is filtered out. Persisted read state via a checkbox stored in the `read_urls` table.
+- **Topics** (`/topics`, `/topics/[word]`) — longitudinal word tracker. `/topics` is a lookup form with suggestion chips from recent year-keywords; `/topics/<word>` plots monthly occurrence counts + top chats + top senders + first/recent samples. FTS5 for ≥ 3-char queries, LIKE for 2-char CJK.
+- **Message permalink** (`/messages/[id]`) — single message with ±20 lines of surrounding context.
+- **Recap** (`/recap/[year]` and `/recap/[year]/[chat_username]`) — Spotify-Wrapped-style year-in-review. Bespoke `/api/recap/[year]/export` ships a hand-crafted standalone HTML download.
 - **Graph** (`/graph`) — force-directed relationship graph (groups + people + you) with min-group-size / min-co-occurrence / max-groups filters, show-names toggle, and include-archived toggle.
-- **Stats drilldowns** (`/stats/sessions|messages|links|contacts`) — Recharts donuts, treemap, radial hour chart, stacked area, etc. Reached from the Overview StatCards.
-- **Settings** (`/settings`) — index status with SSE live progress (`/api/index/stream`), manual reindex, chat hygiene (stale + one-sided + size-based archive in bulk), me-handle detection / editing, member-count + group-membership backfill, persistent **Query cache** panel (rows / size / hits / current epochs / clear-all).
+- **Stats drilldowns** (`/stats/sessions|messages|links|contacts`) — Recharts donuts, treemap, radial hour chart, stacked area, etc. Reached from the Overview StatCards. `/stats/messages` byMonth + byDow are now backed by `daily_counts` for a fast cold path.
+- **Settings** (`/settings`) — language toggle, index status with SSE live progress (`/api/index/stream`), manual reindex, chat hygiene (stale + one-sided + size-based archive in bulk; default preset loaded server-side, other presets fetched from `/api/archive-candidates` on demand), me-handle detection / editing, member-count + group-membership backfill, persistent **Query cache** panel (rows / size / hits / current epochs / clear-all).
+- **Debug** (`/debug`) — internal-only, not in the sidebar. Surfaces `EXPLAIN QUERY PLAN` for hot paths, per-table/index storage from `dbstat`, top cache keys by hits + size, current epochs, last index times.
+
+## i18n + theme + HTML export
+
+- **EN / 中文** toggle in the header (and a labelled control on Settings). Cookie-backed (`we-locale`), reload after toggling so all SSR re-renders against the new dictionary. Dictionary in `lib/i18n.ts`.
+- **Light / dark / system** theme via the in-house `theme-provider.tsx` (replaces `next-themes`, which trips a Next 16 warning).
+- **HTML export** per page: download icon in the header → `/api/export/page?path=<current>` fetches the page in-process, inlines CSS, strips scripts + sidebar + sticky header, returns a `.html` attachment. Charts re-render as pure inline SVG via `lib/server-charts.tsx` so the offline file isn't dependent on JavaScript. The bespoke `/api/recap/[year]/export` is left in place for the highest-fidelity year recap.
 
 ## Layout
 
 ```
 app/
-  layout.tsx                       root layout (Providers + AppShell + theme init script)
-  page.tsx                         Overview (links to /stats/<topic>; Surprises streamed via Suspense)
-  me/page.tsx                      personal "You" dashboard (line chart + agg switcher + top-5 multi-line)
-  contacts/                        list (Notion-style column-header filters) + [username]/detail
+  layout.tsx                       root layout (Providers + LocaleProvider + ExportModeProvider + AppShell + theme init script)
+  page.tsx                         Overview (links to /stats/<topic>; Surprises streamed via Suspense; period-delta on Indexed-messages card)
+  me/page.tsx                      "You" dashboard — agg + split toggles, YoY card, 2×2 top-chats grid (sent/received × private/groups), Suspense-streamed "Did you know" panel
+  contacts/                        list (Notion-style column-header filters) + [username]/detail (header up front, analytics body Suspense-streamed)
   messages/[id]/                   single message permalink with ±20 context lines
   links/                           index + [group]/drill-down (honours ?chat=<username>) + export buttons
   search/                          FTS5 + LIKE fallback; scope pill from ?chat=
-  calendar/                        year heatmap + day-detail; ?chat= scopes every panel
-  reading/                         long-form link queue with persisted read state (page + reading-list.tsx)
-  settings/                        index (SSE) + reindex + hygiene + me-handles + members + cache panel
+  calendar/                        year heatmap + day-detail; ?chat= scopes every panel (all panels cached)
+  reading/                         long-form link queue, deduped by URL with share-count badge + pagination
+  settings/                        language panel + index (SSE) + reindex + hygiene (Suspense, lazy presets) + me-handles + members + cache panel
   graph/                           d3-force relationship graph
+  topics/                          lookup form + /[word] longitudinal tracker (FTS5 / LIKE fallback)
   recap/[year]/                    year-in-review (+ [chat_username]/ per-chat variant)
   stats/                           sessions/messages/links/contacts Recharts drilldowns
+  debug/                           hidden — EXPLAIN QUERY PLAN + dbstat + cache stats
   api/
     search/route.ts                GET ?q=...&archived=1&chat=<username|display>
     index/route.ts                 POST ?mode=quick|deep (one-shot, returns when done)
     index/stream/route.ts          POST ?mode=quick|deep (SSE — per-stage progress events)
     archive/route.ts               archive/restore session bulk-ops; bumps cache_epoch_archive
+    archive-candidates/route.ts    GET ?stale=&type=&oneSided= — lazy preset loader for Settings hygiene panel
     me-handles/route.ts            GET/POST current me-handle list; on POST also refreshes daily_counts + bumps archive epoch
     member-counts/route.ts         POST ?limit= → fetches members for N more groups
     reading/route.ts               POST {urlId, read} → toggles /reading read state
     cache/route.ts                 GET cache stats; DELETE [?prefix=…] clears entries
     export/[kind]/route.ts         CSV/JSON dump for sessions/links/messages/contacts/domains
-    recap/[year]/export/route.ts   self-contained HTML download
+    export/page/route.ts           GET ?path=<route> → standalone .html download (inline CSS, no JS, server-SVG charts)
+    recap/[year]/export/route.ts   bespoke recap HTML download
 
 components/
-  app-shell.tsx                    sidebar + header + cmdk wrapper + keyboard shortcuts
-  app-sidebar.tsx                  "You" sits between Overview and Contacts
+  app-shell.tsx                    sidebar + header (export/language/theme toggles) + cmdk wrapper + keyboard shortcuts
+  app-sidebar.tsx                  sticky-to-viewport sidebar; locale-aware nav labels
   command-palette.tsx              ⌘K (navigate + jump-to-search) + shortcut hint strip
-  keyboard-shortcuts.tsx           j/k row nav, g-prefix go-to-page (g m → /me), / opens palette
-  archived-filter-pill.tsx         shared "Include archived" pill + buildArchivedFilterHref()
+  keyboard-shortcuts.tsx           j/k row nav, g-prefix (g m → /me, g t → /topics, g y → recap), / opens palette
+  archived-filter-pill.tsx         shared "Include archived" pill + buildArchivedFilterHref() (locale-aware)
   archive-session-button.tsx       per-session archive/restore button (contact detail header)
   theme-provider.tsx               in-house ThemeProvider (replaces next-themes; Next 16 hated its <script>)
   theme-toggle.tsx
+  i18n-provider.tsx                LocaleProvider + useLocale() — writes the `we-locale` cookie + reloads
+  language-toggle.tsx              header dropdown (next to theme)
+  export-html-button.tsx           header download icon — links to /api/export/page?path=<current>
+  export-mode.tsx                  ExportModeProvider + useExportMode() — server-resolved from x-export-mode header
   providers.tsx                    Theme + React Query + Tooltip
   search-view.tsx                  client component for /search; accepts scopeUsername/Display from server page
   contacts/column-header.tsx       Notion-style table header (ColumnHeader + ColumnOption + ColumnSearchInput)
   charts/
-    activity-chart.tsx             365-day area + 7-day rolling line
+    activity-chart.tsx             365-day area + 7-day rolling line (Recharts live; ServerLines on export)
     top-domains-bar.tsx, msg-type-list.tsx, year-heatmap.tsx
     sparkline.tsx                  pure-SVG inline sparkline
     hourly-grid.tsx, hourly-heatmap.tsx
     keyword-cloud.tsx, word-cloud.tsx (accepts chatUsername to scope word→search links)
     latency-histogram.tsx, monthly-activity-chart.tsx
     recap/                         monthly-bars, hourly-grid, latency-hist, keyword-cloud, horizontal-bars
-    stats/charts.tsx               Donut, VerticalBars, StackedArea, TwoSeriesLine, LineWithBars, HourRadial, DomainTreemap, MultiLine
+    stats/
+      charts.tsx                   barrel re-export for backward compat
+      donut.tsx, bars.tsx, lines.tsx, radial.tsx, _shared.ts (per-kind splits)
 
 lib/
   wx.ts                            typed wrappers around `wx` CLI
-  db.ts                            better-sqlite3 + schema + additive migrations (urls.dedup_key, daily_counts, read_urls, query_cache, sessions.last_history_*)
+  db.ts                            better-sqlite3 + schema + additive migrations (urls.dedup_key, daily_counts, read_urls, query_cache, sessions.last_history_*; redundant idx_messages_chat_username + idx_urls_chat dropped)
   url-parser.ts                    URL extraction + domain grouping
   indexer.ts                       sessions/contacts/links/history indexers; 50k single-run cap with incremental --until backfill; ANALYZE + bumpIndexEpoch on completion
   cache.ts                         persistent epoch-invalidated query cache (getCachedJSON, bumpIndexEpoch/bumpArchiveEpoch, getCacheStats, clearAllCaches)
-  queries.ts                       core read-side helpers; EXCLUDED_SUBQUERY + EXCLUDED_CHAT_CLAUSE + excludedChatClause() (NULL-safe); me-handle helpers that strip ""; searchMessages with parseSearchTokens + chatUsername scope; refreshDailyCounts
-  queries.calendar.ts              calendar day/year detail queries; all accept chatUsername
-  queries.contact.ts               contact analytics queries + global token baseline cache
+  queries.ts                       core read-side helpers; EXCLUDED_SUBQUERY + EXCLUDED_CHAT_CLAUSE + excludedChatClause() (NULL-safe); me-handle helpers that strip ""; searchMessages with parseSearchTokens + chatUsername scope; refreshDailyCounts; cached getHeatmap
+  queries.calendar.ts              calendar day/year detail queries; all accept chatUsername; every read wrapped in getCachedJSON
+  queries.contact.ts               contact analytics — getContactAnalytics wrapped in getCachedJSON("contact-analytics:<u>")
   queries.graph.ts                 graph data assembly + group/people/me node + co-occurrence edges
-  recap.ts                         year-recap aggregation (wrapped in getCachedJSON) + YoY baseline
-  recap-html.ts                    inline-CSS + inline-SVG renderer for the HTML export
-  stats.ts                         per-topic /stats/ drilldown queries (all cached)
-  me-stats.ts                      /me dashboard data layer (cached; agg-aware)
+  recap.ts                         year-recap aggregation (cached) + YoY baseline + per-year keyword-baseline cache (recap-baseline-tf:y=…)
+  recap-html.ts                    bespoke standalone recap HTML
+  stats.ts                         per-topic /stats/ drilldown queries (all cached); /stats/messages byMonth+byDow now read from daily_counts
+  me-stats.ts                      /me data layer — cached; agg + topN + topRange aware; sent + received top-chats
+  me-fun.ts                        /me "Did you know" data — ~20 personality records; cache key parameter-free
+  topics.ts                        /topics/<word> longitudinal — monthly counts + top chats/senders + first/recent samples
   surprises.ts                     overview anomaly cards (cached per-day key)
   text.ts                          Intl.Segmenter + CJK/EN stopwords + TF-IDF + emoji counting
-  latency.ts                       reply-latency math (bucketing, percentiles, formatting)
+  latency.ts                       reply-latency math — computeLatencies takes optional {partition, onReply}
+  style.ts                         shared computeStyle + StyleFingerprint (used by /me + contact detail)
+  server-charts.tsx                pure-SVG primitives — used by Recharts wrappers in export mode
+  i18n.ts                          {en, zh} dictionary + t() resolver + LOCALE_COOKIE
+  i18n-server.ts                   getServerLocale() async helper for RSC pages
   utils.ts                         shadcn cn() helper
 
-tests/                             vitest pure-function tests (run with `npm test`)
-  text.test.ts, latency.test.ts, url-parser.test.ts, search-tokens.test.ts
+tests/                             vitest tests (run with `npm test`)
+  text.test.ts, latency.test.ts, url-parser.test.ts, search-tokens.test.ts   — pure-function
+  integration/{setup,queries,search,cache}.test.ts                            — integration vs tmpdir SQLite
 
 scripts/
   index.ts                         CLI: bun run scripts/index.ts [--deep|--full]
@@ -189,6 +216,8 @@ since it's user-facing (`"arxiv"`, `"github"`, `"小红书"`, …).
 - `wx contacts` is fetched up to 500 k entries; if your address book is larger, bump the cap in `lib/indexer.ts`.
 - Per-chat history fetch caps at 50,000 messages per single `Deep index` pass (`HISTORY_PAGES_PER_CHAT × HISTORY_BATCH_LIMIT`). Heavy chats with > 50k history need additional Deep-index passes — each subsequent run pulls older messages via `wx history --until <day before earliest indexed>`, extending the window. Chats that still have more history to fetch are flagged with `sessions.last_history_error = "hit 50,000-msg cap…"` and the contacts table shows an amber ⚠.
 - WeChat 1:1 history identifies the OTHER party with `sender = ""` (the empty string); the user's own messages get their real handle (e.g. `YXJ`). `detectMeHandles` / `getMeHandles` / `setMeHandles` strip `""` defensively. If you imported with an older indexer / forgot to re-detect, run **Settings → Re-detect** once to flip the metric.
+- HTML export reproduces every page including their charts as inline SVG (pages whose charts use Recharts swap to `lib/server-charts.tsx` primitives during the export render). The `/graph` page uses a live d3-force simulation that can't be statically rendered — its export shows the empty SVG shell only. The bespoke `/api/recap/[year]/export` is the highest-fidelity offline report.
+- i18n covers the high-traffic UI surface (sidebar, page titles, top-level controls, hero stats, common buttons). Long-form copy on smaller panels is still EN-only; adding `t()` calls is incremental work — new strings go in `lib/i18n.ts` with both `en` and `zh` columns.
 - AI features (style learning, draft replies, topic clustering) are intentionally left out
   for the first cut to keep the app token-free. They're the natural Tier 4 follow-up.
 
