@@ -3,6 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Network } from "lucide-react";
 import { listGraphData } from "@/lib/queries.graph";
 import { GraphClient } from "./client";
+import { t, tf, type TKey } from "@/lib/i18n";
+import { getServerLocale } from "@/lib/i18n-server";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +27,8 @@ export default async function GraphPage({
   }>;
 }) {
   const sp = await searchParams;
+  const locale = await getServerLocale();
+  const tr = (k: TKey) => t(k, locale);
   const minGroupSize = parseIntParam(sp.minGroupSize, 5, 5, 200);
   const minCoOccurrence = parseIntParam(sp.minCoOccurrence, 2, 2, 10);
   const maxGroups = parseIntParam(sp.maxGroups, 80, 20, 200);
@@ -44,28 +48,30 @@ export default async function GraphPage({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
             <Network className="size-5 text-primary" />
-            Relationship graph
+            {tr("graph.title")}
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {totalIndexedGroups} of {totalAvailableGroups}
-            {includeArchived ? " active + archived" : " active"} groups have membership data
-            indexed
+            {tf("graph.descIndexed", locale, {
+              indexed: totalIndexedGroups,
+              total: totalAvailableGroups,
+              kind: includeArchived ? tr("graph.activeArchived") : tr("graph.active"),
+            })}
             {data.nodes.length > 0 && (
               <>
-                {" "}- showing{" "}
+                {" "}- {tr("graph.showing")}{" "}
                 <span className="font-medium text-foreground">{data.stats.rendered_groups}</span>{" "}
-                groups,{" "}
+                {tr("graph.groupsLabel")},{" "}
                 <span className="font-medium text-foreground">{data.stats.rendered_people}</span>{" "}
-                people,{" "}
+                {tr("graph.peopleLabel")},{" "}
                 <span className="font-medium text-foreground">{data.stats.co_occurrence_edges}</span>{" "}
-                co-occurrence edges
+                {tr("graph.edgesLabel")}
               </>
             )}
             {data.stats.archived_groups > 0 && !includeArchived && (
               <>
                 {" "}·{" "}
                 <span className="text-muted-foreground/80">
-                  {data.stats.archived_groups} archived hidden
+                  {tf("graph.archivedHidden", locale, { n: data.stats.archived_groups })}
                 </span>
               </>
             )}
@@ -76,33 +82,28 @@ export default async function GraphPage({
       {totalIndexedGroups === 0 ? (
         <Card>
           <CardHeader>
-            <CardTitle>No memberships yet</CardTitle>
-            <CardDescription>
-              The graph is empty because no group memberships have been indexed.
-            </CardDescription>
+            <CardTitle>{tr("graph.noMembershipsTitle")}</CardTitle>
+            <CardDescription>{tr("graph.noMembershipsDesc")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <p>
-              Head to{" "}
+              {tr("graph.headTo")}{" "}
               <Link href="/settings" className="font-medium underline">
-                Settings
+                {tr("settings.title")}
               </Link>{" "}
-              and click <span className="font-medium">Fetch member counts</span> repeatedly to
-              populate. Each click does about 5 groups.
+              {tr("graph.noMembershipsHowto")}
             </p>
             <p className="text-muted-foreground">
-              You have <span className="font-mono">{totalAvailableGroups}</span> groups awaiting
-              backfill.
+              {tf("graph.noMembershipsCount", locale, { n: totalAvailableGroups })}
             </p>
           </CardContent>
         </Card>
       ) : data.nodes.length === 0 ? (
         <Card>
           <CardHeader>
-            <CardTitle>No nodes match current filters</CardTitle>
+            <CardTitle>{tr("graph.noMatchTitle")}</CardTitle>
             <CardDescription>
-              {totalIndexedGroups} groups have memberships indexed, but none meet the minimum
-              group size of {minGroupSize}. Loosen the filter or toggle archived.
+              {tf("graph.noMatchDesc", locale, { indexed: totalIndexedGroups, min: minGroupSize })}
             </CardDescription>
           </CardHeader>
           <CardContent>

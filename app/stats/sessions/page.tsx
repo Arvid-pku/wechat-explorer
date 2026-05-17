@@ -3,6 +3,8 @@ import { ArrowLeft, Users, Archive, MessageSquare, Calendar } from "lucide-react
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getSessionsStats } from "@/lib/stats";
 import { Donut, VerticalBars } from "@/components/charts/stats/charts";
+import { t, type TKey } from "@/lib/i18n";
+import { getServerLocale } from "@/lib/i18n-server";
 
 export const dynamic = "force-dynamic";
 
@@ -10,59 +12,59 @@ function fmt(n: number) {
   return new Intl.NumberFormat("en").format(n);
 }
 
-const TYPE_LABEL: Record<string, string> = {
-  private: "Private",
-  group: "Group",
-  official: "Official",
-  folded: "Folded",
-  other: "Other",
-};
-
 export default async function SessionsStatsPage() {
+  const locale = await getServerLocale();
+  const tr = (k: TKey) => t(k, locale);
   const s = getSessionsStats();
+
+  const typeLabel: Record<string, string> = {
+    private: tr("stats.sessions.label.private"),
+    group: tr("stats.sessions.label.group"),
+    official: tr("stats.sessions.label.official"),
+    folded: tr("stats.sessions.label.folded"),
+    other: tr("stats.sessions.label.other"),
+  };
 
   return (
     <div className="mx-auto w-full max-w-6xl px-6 py-8 space-y-8">
       <header className="space-y-3">
         <Link href="/" className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="size-3.5 mr-1" /> Overview
+          <ArrowLeft className="size-3.5 mr-1" /> {tr("common.backToOverview")}
         </Link>
         <div>
-          <p className="text-xs uppercase tracking-widest text-muted-foreground">Sessions breakdown</p>
+          <p className="text-xs uppercase tracking-widest text-muted-foreground">{tr("stats.sessions.eyebrow")}</p>
           <h1 className="text-4xl font-semibold tracking-tight mt-1">
-            {fmt(s.totals.total)} <span className="text-muted-foreground text-2xl font-normal">sessions</span>
+            {fmt(s.totals.total)}{" "}
+            <span className="text-muted-foreground text-2xl font-normal">{tr("stats.sessions.heroSuffix")}</span>
           </h1>
-          <p className="text-sm text-muted-foreground mt-3 max-w-2xl">
-            One row per chat that ever appeared in your client — private DMs, group chats, official accounts,
-            and the folded inbox.
-          </p>
+          <p className="text-sm text-muted-foreground mt-3 max-w-2xl">{tr("stats.sessions.heroDesc")}</p>
         </div>
       </header>
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Tile icon={<MessageSquare className="size-4" />} label="Active" value={fmt(s.totals.active)} />
-        <Tile icon={<Archive className="size-4" />} label="Archived" value={fmt(s.totals.archived)} />
-        <Tile icon={<Users className="size-4" />} label="Groups" value={fmt(s.byType.find((t) => t.chat_type === "group")?.n ?? 0)} />
-        <Tile icon={<Calendar className="size-4" />} label="No indexed msgs" value={fmt(s.noMessageCount)} />
+        <Tile icon={<MessageSquare className="size-4" />} label={tr("stats.sessions.tileActive")} value={fmt(s.totals.active)} />
+        <Tile icon={<Archive className="size-4" />} label={tr("stats.sessions.tileArchived")} value={fmt(s.totals.archived)} />
+        <Tile icon={<Users className="size-4" />} label={tr("stats.sessions.tileGroups")} value={fmt(s.byType.find((t) => t.chat_type === "group")?.n ?? 0)} />
+        <Tile icon={<Calendar className="size-4" />} label={tr("stats.sessions.tileNoMsgs")} value={fmt(s.noMessageCount)} />
       </section>
 
       <section className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Type breakdown</CardTitle>
-            <CardDescription>Active sessions split by chat type.</CardDescription>
+            <CardTitle>{tr("stats.sessions.typeTitle")}</CardTitle>
+            <CardDescription>{tr("stats.sessions.typeDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <Donut
-              centerLabel={{ title: "active", value: fmt(s.totals.active) }}
-              data={s.byType.map((r) => ({ name: TYPE_LABEL[r.chat_type] ?? r.chat_type, value: r.n }))}
+              centerLabel={{ title: tr("stats.sessions.donutActive"), value: fmt(s.totals.active) }}
+              data={s.byType.map((r) => ({ name: typeLabel[r.chat_type] ?? r.chat_type, value: r.n }))}
             />
           </CardContent>
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Active vs archived</CardTitle>
-            <CardDescription>Archived sessions are hidden from stats by default.</CardDescription>
+            <CardTitle>{tr("stats.sessions.activeVsArchTitle")}</CardTitle>
+            <CardDescription>{tr("stats.sessions.activeVsArchDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <Donut data={s.byArchive.map((r) => ({ name: r.kind, value: r.n }))} />
@@ -73,8 +75,8 @@ export default async function SessionsStatsPage() {
       <section className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Messages per chat</CardTitle>
-            <CardDescription>How chatty is each session?</CardDescription>
+            <CardTitle>{tr("stats.sessions.msgsPerTitle")}</CardTitle>
+            <CardDescription>{tr("stats.sessions.msgsPerDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <VerticalBars
@@ -85,8 +87,8 @@ export default async function SessionsStatsPage() {
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Last-active distribution</CardTitle>
-            <CardDescription>When did each session most recently see activity?</CardDescription>
+            <CardTitle>{tr("stats.sessions.lastActiveTitle")}</CardTitle>
+            <CardDescription>{tr("stats.sessions.lastActiveDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <VerticalBars
@@ -99,14 +101,15 @@ export default async function SessionsStatsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Largest groups</CardTitle>
-          <CardDescription>Top 10 groups by member count.</CardDescription>
+          <CardTitle>{tr("stats.sessions.largestGroupsTitle")}</CardTitle>
+          <CardDescription>{tr("stats.sessions.largestGroupsDesc")}</CardDescription>
         </CardHeader>
         <CardContent>
           {s.topGroupsBySize.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No member counts indexed yet. Hit <Link href="/settings" className="underline">Settings</Link> →
-              Fetch member counts to backfill.
+              {tr("stats.sessions.noMembers")}{" "}
+              <Link href="/settings" className="underline">{tr("settings.title")}</Link>{" "}
+              → {tr("stats.sessions.noMembersSuffix")}
             </p>
           ) : (
             <ul className="space-y-2">
@@ -134,8 +137,8 @@ export default async function SessionsStatsPage() {
       {s.archivedReasons.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Why archived?</CardTitle>
-            <CardDescription>Reason recorded when each archived session was bulk-archived.</CardDescription>
+            <CardTitle>{tr("stats.sessions.whyArchivedTitle")}</CardTitle>
+            <CardDescription>{tr("stats.sessions.whyArchivedDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <VerticalBars

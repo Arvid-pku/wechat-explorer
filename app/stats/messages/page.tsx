@@ -1,8 +1,11 @@
 import Link from "next/link";
 import { ArrowLeft, MessageSquare, Sparkles, Clock, Calendar } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { HeroCard } from "@/components/hero-card";
 import { getMessagesStats } from "@/lib/stats";
 import { Donut, VerticalBars, StackedArea, HourRadial } from "@/components/charts/stats/charts";
+import { t, tf, type TKey } from "@/lib/i18n";
+import { getServerLocale } from "@/lib/i18n-server";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +14,8 @@ function fmt(n: number) {
 }
 
 export default async function MessagesStatsPage() {
+  const locale = await getServerLocale();
+  const tr = (k: TKey) => t(k, locale);
   const s = getMessagesStats();
   const minePct = s.total > 0 ? (s.mine / s.total) * 100 : 0;
 
@@ -18,52 +23,54 @@ export default async function MessagesStatsPage() {
     <div className="mx-auto w-full max-w-6xl px-6 py-8 space-y-8">
       <header className="space-y-3">
         <Link href="/" className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="size-3.5 mr-1" /> Overview
+          <ArrowLeft className="size-3.5 mr-1" /> {tr("common.backToOverview")}
         </Link>
         <div>
-          <p className="text-xs uppercase tracking-widest text-muted-foreground">Indexed messages</p>
+          <p className="text-xs uppercase tracking-widest text-muted-foreground">{tr("stats.messages.eyebrow")}</p>
           <h1 className="text-4xl font-semibold tracking-tight mt-1">
-            {fmt(s.total)} <span className="text-muted-foreground text-2xl font-normal">messages</span>
+            {fmt(s.total)}{" "}
+            <span className="text-muted-foreground text-2xl font-normal">{tr("stats.messages.heroSuffix")}</span>
           </h1>
           <p className="text-sm text-muted-foreground mt-3 max-w-2xl">
-            {fmt(s.mine)} from you ({minePct.toFixed(1)}%), {fmt(s.theirs)} from everyone else.
-            {s.excludedFromCount > 0 && (
-              <>
-                {" "}Plus {fmt(s.excludedFromCount)} more from official accounts and the folded inbox that
-                are excluded from these charts.
-              </>
-            )}
+            {tf("stats.messages.heroDesc", locale, {
+              mine: fmt(s.mine),
+              pct: `${minePct.toFixed(1)}%`,
+              theirs: fmt(s.theirs),
+            })}
+            {s.excludedFromCount > 0 &&
+              tf("stats.messages.heroExtra", locale, { n: fmt(s.excludedFromCount) })}
           </p>
         </div>
       </header>
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Tile icon={<MessageSquare className="size-4" />} label="Yours" value={fmt(s.mine)} sub={`${minePct.toFixed(1)}%`} />
-        <Tile icon={<Sparkles className="size-4" />} label="Theirs" value={fmt(s.theirs)} sub={`${(100 - minePct).toFixed(1)}%`} />
-        <Tile icon={<Calendar className="size-4" />} label="Months covered" value={fmt(s.byMonth.length)} sub="of indexed history" />
-        <Tile
+        <HeroCard size="sm" icon={<MessageSquare className="size-4" />} label={tr("stats.messages.tileYours")} value={fmt(s.mine)} sub={`${minePct.toFixed(1)}%`} />
+        <HeroCard size="sm" icon={<Sparkles className="size-4" />} label={tr("stats.messages.tileTheirs")} value={fmt(s.theirs)} sub={`${(100 - minePct).toFixed(1)}%`} />
+        <HeroCard size="sm" icon={<Calendar className="size-4" />} label={tr("stats.messages.tileMonths")} value={fmt(s.byMonth.length)} sub={tr("stats.messages.tileMonthsSub")} />
+        <HeroCard
+          size="sm"
           icon={<Clock className="size-4" />}
-          label="Peak hour"
+          label={tr("stats.messages.tilePeak")}
           value={(() => {
             const peak = [...s.byHour].sort((a, b) => b.mine + b.theirs - (a.mine + a.theirs))[0];
             return `${String(peak?.hour ?? 0).padStart(2, "0")}:00`;
           })()}
           sub={(() => {
             const peak = [...s.byHour].sort((a, b) => b.mine + b.theirs - (a.mine + a.theirs))[0];
-            return peak ? `${fmt(peak.mine + peak.theirs)} msgs` : "";
+            return peak ? `${fmt(peak.mine + peak.theirs)} ${tr("stats.messages.tilePeakSub")}` : "";
           })()}
         />
       </section>
 
       <Card>
         <CardHeader>
-          <CardTitle>Activity by month (you vs them)</CardTitle>
-          <CardDescription>Stacked: your share on top of theirs over your full indexed history.</CardDescription>
+          <CardTitle>{tr("stats.messages.monthlyTitle")}</CardTitle>
+          <CardDescription>{tr("stats.messages.monthlyDesc")}</CardDescription>
         </CardHeader>
         <CardContent>
           <StackedArea
             data={s.byMonth.map((r) => ({ label: r.ym, a: r.mine, b: r.theirs }))}
-            seriesLabels={["You", "Them"]}
+            seriesLabels={[tr("stats.messages.seriesYou"), tr("stats.messages.seriesThem")]}
           />
         </CardContent>
       </Card>
@@ -71,20 +78,20 @@ export default async function MessagesStatsPage() {
       <section className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Message types</CardTitle>
-            <CardDescription>Donut of the indexed type distribution.</CardDescription>
+            <CardTitle>{tr("stats.messages.typesTitle")}</CardTitle>
+            <CardDescription>{tr("stats.messages.typesDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <Donut
-              centerLabel={{ title: "messages", value: fmt(s.total) }}
+              centerLabel={{ title: tr("stats.messages.donutCenter"), value: fmt(s.total) }}
               data={s.byMsgType.slice(0, 10).map((r) => ({ name: r.msg_type || "—", value: r.n }))}
             />
           </CardContent>
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>By weekday</CardTitle>
-            <CardDescription>Does the weekend look different?</CardDescription>
+            <CardTitle>{tr("stats.messages.dowTitle")}</CardTitle>
+            <CardDescription>{tr("stats.messages.dowDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <VerticalBars
@@ -97,8 +104,8 @@ export default async function MessagesStatsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>By hour of day</CardTitle>
-          <CardDescription>Radial — your circadian pattern at a glance. Bars are total messages per hour (24-hour clock).</CardDescription>
+          <CardTitle>{tr("stats.messages.byHourTitle")}</CardTitle>
+          <CardDescription>{tr("stats.messages.byHourDesc")}</CardDescription>
         </CardHeader>
         <CardContent>
           <HourRadial data={s.byHour} />
@@ -108,8 +115,8 @@ export default async function MessagesStatsPage() {
       <section className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Longest messages</CardTitle>
-            <CardDescription>Your top-5 single-message essays.</CardDescription>
+            <CardTitle>{tr("stats.messages.longestTitle")}</CardTitle>
+            <CardDescription>{tr("stats.messages.longestDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <ul className="space-y-3">
@@ -123,7 +130,7 @@ export default async function MessagesStatsPage() {
                     ) : (
                       <span className="font-medium truncate">{m.chat_display}</span>
                     )}
-                    <span className="text-xs text-muted-foreground tabular-nums">{fmt(m.len)} chars</span>
+                    <span className="text-xs text-muted-foreground tabular-nums">{fmt(m.len)} {tr("stats.messages.chars")}</span>
                   </div>
                   <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{m.preview}…</p>
                 </li>
@@ -133,8 +140,8 @@ export default async function MessagesStatsPage() {
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Fastest minutes</CardTitle>
-            <CardDescription>Most messages in a single minute — usually a hot group convo.</CardDescription>
+            <CardTitle>{tr("stats.messages.fastestTitle")}</CardTitle>
+            <CardDescription>{tr("stats.messages.fastestDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <ul className="space-y-3">
@@ -161,16 +168,3 @@ export default async function MessagesStatsPage() {
   );
 }
 
-function Tile({ icon, label, value, sub }: { icon: React.ReactNode; label: string; value: string; sub?: string }) {
-  return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardDescription className="inline-flex items-center gap-1.5">{icon} {label}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <p className="text-2xl font-semibold tabular-nums">{value}</p>
-        {sub && <p className="text-xs text-muted-foreground mt-1">{sub}</p>}
-      </CardContent>
-    </Card>
-  );
-}

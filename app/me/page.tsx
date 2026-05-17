@@ -35,10 +35,11 @@ import {
   MultiLine,
 } from "@/components/charts/stats/charts";
 import type { MeTimePoint } from "@/lib/me-stats";
-import { t, type TKey } from "@/lib/i18n";
+import { t, tf, type TKey } from "@/lib/i18n";
 import { getServerLocale } from "@/lib/i18n-server";
 import { LatencyHistogram } from "@/components/charts/latency-histogram";
 import { WordCloud } from "@/components/charts/word-cloud";
+import { HeroCard } from "@/components/hero-card";
 import { formatLatency } from "@/lib/latency";
 
 export const dynamic = "force-dynamic";
@@ -59,7 +60,11 @@ function parseTopN(v: string | undefined): MeTopN {
   return VALID_TOP_NS.includes(n as MeTopN) ? (n as MeTopN) : 5;
 }
 function parseTopRange(v: string | undefined): MeTopRange {
-  return VALID_TOP_RANGES.includes(v as MeTopRange) ? (v as MeTopRange) : "all";
+  if (VALID_TOP_RANGES.includes(v as MeTopRange)) return v as MeTopRange;
+  // Default to the rolling 12 months. "All time" data on a long-lived account
+  // is dominated by ancient relationships — `1y` surfaces who's *currently*
+  // active. The control still lets the user flip back to `all`.
+  return "1y";
 }
 
 export default async function MePage({
@@ -95,27 +100,22 @@ export default async function MePage({
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <AlertCircle className="size-4 text-amber-600" />
-              Your me-handles aren&apos;t set yet
+              {tr("me.noHandlesTitle")}
             </CardTitle>
-            <CardDescription>
-              This page summarises messages you sent. Without knowing which sender
-              name(s) are you, every metric reads zero.
-            </CardDescription>
+            <CardDescription>{tr("me.noHandlesDesc")}</CardDescription>
           </CardHeader>
           <CardContent className="text-sm space-y-3">
             <p>
               {s.meHandles.length === 0
-                ? "No me-handles are configured."
-                : `You have ${s.meHandles.length} me-handle(s) but none of them match any messages.`}
+                ? tr("me.noHandlesEmpty")
+                : tf("me.noHandlesUnmatched", locale, { n: s.meHandles.length })}
             </p>
             <p>
-              Open{" "}
+              {tr("me.noHandlesOpenSettingsPre")}{" "}
               <Link href="/settings" className="font-medium underline">
-                Settings
+                {tr("settings.title")}
               </Link>
-              , scroll to <em>Chat hygiene</em>, and either click{" "}
-              <span className="font-medium">Re-detect</span> or set them
-              manually.
+              {tr("me.noHandlesOpenSettingsSuffix")}
             </p>
           </CardContent>
         </Card>
@@ -133,9 +133,12 @@ export default async function MePage({
           <Sparkles className="size-5 text-primary" /> {tr("me.title")}
         </h1>
         <p className="text-sm text-muted-foreground">
-          {fmt(s.totals.myMessages)} messages from you across {fmt(s.totals.activeDays)}{" "}
-          active days. Identified by {s.meHandles.length} handle
-          {s.meHandles.length === 1 ? "" : "s"}:{" "}
+          {tf("me.headerSummary", locale, {
+            my: fmt(s.totals.myMessages),
+            days: fmt(s.totals.activeDays),
+            n: s.meHandles.length,
+            plural: locale === "zh" ? "" : s.meHandles.length === 1 ? "" : "s",
+          })}{" "}
           {s.meHandles.map((h, i) => (
             <Badge key={i} variant="secondary" className="font-mono ml-1 text-[11px]">
               {h === "" ? "(empty)" : h}
@@ -146,33 +149,32 @@ export default async function MePage({
 
       {/* Hero stats */}
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Hero
+        <HeroCard
+          size="sm"
           icon={<MessageSquare className="size-4" />}
           label={tr("me.heroMessages")}
           value={fmt(s.totals.myMessages)}
           sub={`${pct(s.totals.mySharePct)} ${tr("me.heroShare")}`}
         />
-        <Hero
+        <HeroCard
+          size="sm"
           icon={<CalendarCheck className="size-4" />}
           label={tr("me.heroActiveDays")}
           value={fmt(s.totals.activeDays)}
-          sub={
-            locale === "zh"
-              ? `最长连续 ${s.totals.longestStreak} 天 · 活跃日均 ${s.totals.msgsPerActiveDay.toFixed(1)} 条`
-              : `Longest streak ${s.totals.longestStreak}d · ${s.totals.msgsPerActiveDay.toFixed(1)} msgs/day on active days`
-          }
+          sub={tf("me.heroLongestStreakSub", locale, {
+            n: s.totals.longestStreak,
+            rate: s.totals.msgsPerActiveDay.toFixed(1),
+          })}
         />
-        <Hero
+        <HeroCard
+          size="sm"
           icon={<Clock className="size-4" />}
           label={tr("me.heroPeakHour")}
           value={`${String(s.totals.peakHour).padStart(2, "0")}:00`}
-          sub={
-            locale === "zh"
-              ? `这一小时共发出 ${fmt(s.totals.peakHourCount)} 条`
-              : `${fmt(s.totals.peakHourCount)} messages sent in that hour`
-          }
+          sub={tf("me.heroPeakHourSub", locale, { n: fmt(s.totals.peakHourCount) })}
         />
-        <Hero
+        <HeroCard
+          size="sm"
           icon={<Flame className="size-4" />}
           label={tr("me.heroMedianReply")}
           value={
@@ -284,10 +286,8 @@ export default async function MePage({
       <section className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>When you talk</CardTitle>
-            <CardDescription>
-              Hour-of-day pattern. Look for sleep windows and the late-night spike.
-            </CardDescription>
+            <CardTitle>{tr("me.whenYouTalk")}</CardTitle>
+            <CardDescription>{tr("me.whenYouTalkDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <HourRadial
@@ -297,10 +297,8 @@ export default async function MePage({
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>By weekday</CardTitle>
-            <CardDescription>
-              Does the weekend look like the workweek for you?
-            </CardDescription>
+            <CardTitle>{tr("me.byWeekday")}</CardTitle>
+            <CardDescription>{tr("me.byWeekdayDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <VerticalBars
@@ -314,20 +312,20 @@ export default async function MePage({
       {/* Style fingerprint */}
       <Card>
         <CardHeader>
-          <CardTitle>Your voice fingerprint</CardTitle>
+          <CardTitle>{tr("me.voiceTitle")}</CardTitle>
           <CardDescription>
-            Sampled across your most recent {fmt(s.style.sampleSize)} messages.
+            {tf("me.voiceSampled", locale, { n: fmt(s.style.sampleSize) })}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-sm">
-            <Metric label="Avg chars / text" value={s.style.avgChars.toFixed(0)} />
-            <Metric label="Emoji / text" value={s.style.emojiPerMsg.toFixed(2)} />
-            <Metric label="Link rate" value={s.style.linkPerMsg.toFixed(3)} />
+            <Metric label={tr("contact.metric.avgChars")} value={s.style.avgChars.toFixed(0)} />
+            <Metric label={tr("contact.metric.emojiPerMsg")} value={s.style.emojiPerMsg.toFixed(2)} />
+            <Metric label={tr("contact.metric.linkRate")} value={s.style.linkPerMsg.toFixed(3)} />
             <Metric
               label={
                 <span className="inline-flex items-center gap-1">
-                  <Mic className="size-3" /> Voice
+                  <Mic className="size-3" /> {tr("contact.metric.voice")}
                 </span>
               }
               value={pct(s.style.voiceShare * 100)}
@@ -335,7 +333,7 @@ export default async function MePage({
             <Metric
               label={
                 <span className="inline-flex items-center gap-1">
-                  <ImageIcon className="size-3" /> Image
+                  <ImageIcon className="size-3" /> {tr("contact.metric.image")}
                 </span>
               }
               value={pct(s.style.imageShare * 100)}
@@ -343,7 +341,7 @@ export default async function MePage({
             <Metric
               label={
                 <span className="inline-flex items-center gap-1">
-                  <Smile className="size-3" /> Sticker
+                  <Smile className="size-3" /> {tr("contact.metric.sticker")}
                 </span>
               }
               value={pct(s.style.stickerShare * 100)}
@@ -352,7 +350,7 @@ export default async function MePage({
           {s.style.topEmoji.length > 0 && (
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-1.5">
-                Top emoji from you
+                {tr("me.topEmojiHeading")}
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {s.style.topEmoji.map((e) => (
@@ -377,13 +375,9 @@ export default async function MePage({
       <section className="space-y-4">
         <div className="flex items-end justify-between gap-3 flex-wrap">
           <div>
-            <h2 className="text-xl font-semibold tracking-tight">
-              {locale === "zh" ? "你的高频会话" : "Your top chats over time"}
-            </h2>
+            <h2 className="text-xl font-semibold tracking-tight">{tr("me.topChatsTitle")}</h2>
             <p className="text-sm text-muted-foreground mt-1">
-              {locale === "zh"
-                ? `每${s.agg === "week" ? "周" : s.agg === "year" ? "年" : "月"}对比，左列是你发出的，右列是对方/群里发给你的。`
-                : `Per ${s.agg === "week" ? "week" : s.agg === "year" ? "year" : "month"}, with what you send on the left and what they send you on the right.`}
+              {tf("me.topChatsDesc", locale, { unit: unitFor(s.agg, locale) })}
             </p>
           </div>
           <TopChatsToolbar
@@ -396,60 +390,42 @@ export default async function MePage({
         </div>
         <section className="grid gap-6 lg:grid-cols-2">
           <TopChatsCard
-            title={locale === "zh" ? "你给谁发最多（私聊）" : "Who you message most (1:1)"}
-            desc={
-              locale === "zh"
-                ? `每${s.agg === "week" ? "周" : s.agg === "year" ? "年" : "月"}你发出的消息，按总量排序。`
-                : `Your sends per ${s.agg === "week" ? "week" : s.agg === "year" ? "year" : "month"}, sorted by total you sent.`
-            }
-            empty={locale === "zh" ? "暂无私聊数据，跑一次 Deep index。" : "No private chats yet — try a deep index."}
+            title={tr("me.privateSent")}
+            desc={tf("me.privateSentDesc", locale, { unit: unitFor(s.agg, locale) })}
+            empty={tr("me.privateSentEmpty")}
             chats={s.topPrivate}
             series={s.topPrivateSeries}
             metric="my_msgs"
+            locale={locale}
           />
           <TopChatsCard
-            title={locale === "zh" ? "谁给你发最多（私聊）" : "Who messages you most (1:1)"}
-            desc={
-              locale === "zh"
-                ? `每${s.agg === "week" ? "周" : s.agg === "year" ? "年" : "月"}对方发给你的消息，按总量排序。`
-                : `Their messages to you per ${s.agg === "week" ? "week" : s.agg === "year" ? "year" : "month"}, sorted by their total.`
-            }
-            empty={
-              locale === "zh"
-                ? "暂无对方消息数据，跑一次 Deep index。"
-                : "No incoming private messages yet — try a deep index."
-            }
+            title={tr("me.privateReceived")}
+            desc={tf("me.privateReceivedDesc", locale, { unit: unitFor(s.agg, locale) })}
+            empty={tr("me.privateReceivedEmpty")}
             chats={s.topPrivateReceived}
             series={s.topPrivateReceivedSeries}
             metric="theirs"
+            locale={locale}
           />
           <TopChatsCard
-            title={locale === "zh" ? "你贡献最多的群" : "Groups you contribute to most"}
-            desc={
-              locale === "zh"
-                ? `每${s.agg === "week" ? "周" : s.agg === "year" ? "年" : "月"}你在群里的发言。`
-                : `Your sends per ${s.agg === "week" ? "week" : s.agg === "year" ? "year" : "month"}, sorted by total you sent.`
-            }
-            empty={locale === "zh" ? "暂无群聊数据。" : "No groups indexed for you yet."}
+            title={tr("me.groupsSent")}
+            desc={tf("me.groupsSentDesc", locale, { unit: unitFor(s.agg, locale) })}
+            empty={tr("me.groupsSentEmpty")}
             chats={s.topGroups}
             series={s.topGroupSeries}
             metric="my_msgs"
             showMembers
+            locale={locale}
           />
           <TopChatsCard
-            title={locale === "zh" ? "群里给你发最多的" : "Groups that message you most"}
-            desc={
-              locale === "zh"
-                ? `每${s.agg === "week" ? "周" : s.agg === "year" ? "年" : "月"}群里其他人发的消息总量。`
-                : `Total messages other group members send per ${s.agg === "week" ? "week" : s.agg === "year" ? "year" : "month"}.`
-            }
-            empty={
-              locale === "zh" ? "暂无群消息数据。" : "No group messages indexed yet — try a deep index."
-            }
+            title={tr("me.groupsReceived")}
+            desc={tf("me.groupsReceivedDesc", locale, { unit: unitFor(s.agg, locale) })}
+            empty={tr("me.groupsReceivedEmpty")}
             chats={s.topGroupsReceived}
             series={s.topGroupReceivedSeries}
             metric="theirs"
             showMembers
+            locale={locale}
           />
         </section>
       </section>
@@ -457,38 +433,35 @@ export default async function MePage({
       {/* Reply latency */}
       <Card>
         <CardHeader>
-          <CardTitle>How you reply</CardTitle>
+          <CardTitle>{tr("me.replyTitle")}</CardTitle>
           <CardDescription>
-            {s.latency.sampleSize > 0 ? (
-              <>
-                Based on {fmt(s.latency.sampleSize)} alternating-side reply pairs
-                (capped to the last 200k messages). Median you → them{" "}
-                {s.latency.meToThemMedianSec > 0
-                  ? formatLatency(s.latency.meToThemMedianSec)
-                  : "—"}{" "}
-                · them → you{" "}
-                {s.latency.themToMeMedianSec > 0
-                  ? formatLatency(s.latency.themToMeMedianSec)
-                  : "—"}
-                .
-              </>
-            ) : (
-              "Not enough back-and-forth in your indexed history."
-            )}
+            {s.latency.sampleSize > 0
+              ? tf("me.replyDesc", locale, {
+                  n: fmt(s.latency.sampleSize),
+                  you:
+                    s.latency.meToThemMedianSec > 0
+                      ? formatLatency(s.latency.meToThemMedianSec)
+                      : "—",
+                  them:
+                    s.latency.themToMeMedianSec > 0
+                      ? formatLatency(s.latency.themToMeMedianSec)
+                      : "—",
+                })
+              : tr("me.replyEmpty")}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {s.latency.sampleSize > 0 && (
             <>
               <div className="space-y-1">
-                <p className="text-xs text-muted-foreground">You → them</p>
+                <p className="text-xs text-muted-foreground">{tr("me.youToThem")}</p>
                 <LatencyHistogram
                   data={s.latency.meToThemHist.map((b) => ({ label: b.label, n: b.n }))}
                   tone="primary"
                 />
               </div>
               <div className="space-y-1">
-                <p className="text-xs text-muted-foreground">Them → you</p>
+                <p className="text-xs text-muted-foreground">{tr("me.themToYou")}</p>
                 <LatencyHistogram
                   data={s.latency.themToMeHist.map((b) => ({ label: b.label, n: b.n }))}
                   tone="muted"
@@ -503,17 +476,14 @@ export default async function MePage({
       <section className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>What you talk about</CardTitle>
+            <CardTitle>{tr("me.topicsTitle")}</CardTitle>
             <CardDescription>
-              Top {s.topics.length} TF-IDF words from your text vs everyone
-              else&apos;s. Click to search.
+              {tf("me.topicsDesc", locale, { n: s.topics.length })}
             </CardDescription>
           </CardHeader>
           <CardContent>
             {s.topics.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Not enough text from you to score topics yet.
-              </p>
+              <p className="text-sm text-muted-foreground">{tr("me.topicsEmpty")}</p>
             ) : (
               <WordCloud words={s.topics} />
             )}
@@ -521,15 +491,15 @@ export default async function MePage({
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>What you send</CardTitle>
-            <CardDescription>Message-type mix on your side.</CardDescription>
+            <CardTitle>{tr("me.whatYouSend")}</CardTitle>
+            <CardDescription>{tr("me.whatYouSendDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             {s.msgTypeBreakdown.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No data.</p>
+              <p className="text-sm text-muted-foreground">{tr("contact.msgTypesEmpty")}</p>
             ) : (
               <Donut
-                centerLabel={{ title: "yours", value: fmt(s.totals.myMessages) }}
+                centerLabel={{ title: tr("me.donutCenterYours"), value: fmt(s.totals.myMessages) }}
                 data={s.msgTypeBreakdown.slice(0, 8).map((r) => ({
                   name: r.msg_type || "—",
                   value: r.n,
@@ -543,12 +513,12 @@ export default async function MePage({
       <section className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Links you share</CardTitle>
-            <CardDescription>Top domain groups in URLs you sent.</CardDescription>
+            <CardTitle>{tr("me.linksTitle")}</CardTitle>
+            <CardDescription>{tr("me.linksDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             {s.topDomains.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No links from you yet.</p>
+              <p className="text-sm text-muted-foreground">{tr("me.linksEmpty")}</p>
             ) : (
               <DomainList rows={s.topDomains} />
             )}
@@ -559,22 +529,17 @@ export default async function MePage({
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <AlertCircle className="size-4 text-amber-600" />
-              Shouting into the void
+              {tr("me.shoutingTitle")}
             </CardTitle>
             <CardDescription>
-              {s.oneSided.totalCount > 0 ? (
-                <>
-                  {fmt(s.oneSided.totalCount)} private chats where you sent ≥ 5
-                  messages but got ≤ 1 reply back. Showing the heaviest.
-                </>
-              ) : (
-                "No one-sided private chats — every conversation has had a reply."
-              )}
+              {s.oneSided.totalCount > 0
+                ? tf("me.shoutingDesc", locale, { n: fmt(s.oneSided.totalCount) })
+                : tr("me.shoutingNone")}
             </CardDescription>
           </CardHeader>
           <CardContent>
             {s.oneSided.rows.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Nothing to show.</p>
+              <p className="text-sm text-muted-foreground">{tr("me.shoutingEmpty")}</p>
             ) : (
               <ul className="space-y-2 text-sm">
                 {s.oneSided.rows.map((r) => (
@@ -589,7 +554,10 @@ export default async function MePage({
                       {r.display_name || r.username}
                     </Link>
                     <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
-                      {fmt(r.my_msgs)} yours · {fmt(r.theirs)} theirs
+                      {tf("me.yoursTheirs", locale, {
+                        mine: fmt(r.my_msgs),
+                        theirs: fmt(r.theirs),
+                      })}
                     </span>
                   </li>
                 ))}
@@ -604,13 +572,13 @@ export default async function MePage({
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Trophy className="size-4 text-primary" /> Longest things you sent
+              <Trophy className="size-4 text-primary" /> {tr("me.longestTitle")}
             </CardTitle>
-            <CardDescription>Top 5 text essays.</CardDescription>
+            <CardDescription>{tr("me.longestDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             {s.longestMessages.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No long text messages.</p>
+              <p className="text-sm text-muted-foreground">{tr("me.longestEmpty")}</p>
             ) : (
               <ul className="space-y-3">
                 {s.longestMessages.map((m) => (
@@ -628,7 +596,7 @@ export default async function MePage({
                         <span className="font-medium truncate">{m.chat_display}</span>
                       )}
                       <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
-                        {fmt(m.len)} chars
+                        {fmt(m.len)} {tr("me.chars")}
                       </span>
                     </div>
                     <p className="text-xs text-muted-foreground mt-1 line-clamp-2 break-words">
@@ -648,15 +616,15 @@ export default async function MePage({
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Flame className="size-4 text-primary" /> Most messages in 1 minute
+                <Flame className="size-4 text-primary" /> {tr("me.burstTitle")}
               </CardTitle>
               <CardDescription>
-                You sent {fmt(s.burst.n)} messages within a single minute.
+                {tf("me.burstDesc", locale, { n: fmt(s.burst.n) })}
               </CardDescription>
             </CardHeader>
             <CardContent className="text-sm space-y-2">
               <div>
-                <span className="text-muted-foreground">Where:</span>{" "}
+                <span className="text-muted-foreground">{tr("me.where")}:</span>{" "}
                 {s.burst.chat_username ? (
                   <Link
                     href={`/contacts/${encodeURIComponent(s.burst.chat_username)}`}
@@ -669,7 +637,7 @@ export default async function MePage({
                 )}
               </div>
               <div>
-                <span className="text-muted-foreground">When:</span>{" "}
+                <span className="text-muted-foreground">{tr("me.when")}:</span>{" "}
                 <span className="font-mono tabular-nums">{s.burst.minute}</span>
               </div>
             </CardContent>
@@ -874,12 +842,12 @@ function SplitToggle({
     {
       key: false,
       label: tr("common.combined"),
-      title: locale === "zh" ? "对方消息合并为一条线" : "Show all of their messages as a single line",
+      title: tr("me.combinedTooltipOn"),
     },
     {
       key: true,
       label: tr("common.splitByType"),
-      title: locale === "zh" ? "把对方消息拆分为私聊和群聊" : "Break out their messages into private chats vs groups",
+      title: tr("me.splitTooltipOn"),
     },
   ];
   return (
@@ -927,33 +895,6 @@ function ThemActivityChart({
         { key: "them_group", label: `${tr("common.them")} · ${tr("common.groups")}` },
       ]}
     />
-  );
-}
-
-function Hero({
-  icon,
-  label,
-  value,
-  sub,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  sub?: string;
-}) {
-  return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardDescription className="inline-flex items-center gap-1.5">
-          {icon}
-          {label}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-1">
-        <div className="text-2xl font-semibold tracking-tight tabular-nums">{value}</div>
-        {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
-      </CardContent>
-    </Card>
   );
 }
 
@@ -1016,6 +957,7 @@ function CompactRanking({
   /** Which column to lead with — "my_msgs" or "theirs". Drives the big number
    *  on each row; the muted slash-total stays the same either way. */
   metric = "my_msgs",
+  locale,
 }: {
   rows: {
     username: string;
@@ -1027,11 +969,12 @@ function CompactRanking({
   }[];
   showMembers?: boolean;
   metric?: "my_msgs" | "theirs";
+  locale: "en" | "zh";
 }) {
   return (
     <details className="text-xs text-muted-foreground">
       <summary className="cursor-pointer hover:text-foreground select-none">
-        Show full top-{rows.length} ranking
+        {tf("me.fullRanking", locale, { n: rows.length })}
       </summary>
       <ol className="mt-2 space-y-0.5">
         {rows.map((r, i) => {
@@ -1082,6 +1025,7 @@ function TopChatsCard({
   series,
   metric,
   showMembers,
+  locale,
 }: {
   title: string;
   desc: string;
@@ -1098,6 +1042,7 @@ function TopChatsCard({
   series: { chats: { username: string; display_name: string }[]; points: Record<string, number | string>[] };
   metric: "my_msgs" | "theirs";
   showMembers?: boolean;
+  locale: "en" | "zh";
 }) {
   return (
     <Card>
@@ -1122,11 +1067,18 @@ function TopChatsCard({
             rows={chats}
             showMembers={showMembers}
             metric={metric}
+            locale={locale}
           />
         )}
       </CardContent>
     </Card>
   );
+}
+
+function unitFor(agg: MeAggregation, locale: "en" | "zh"): string {
+  if (agg === "week") return t("me.unitWeek", locale);
+  if (agg === "year") return t("me.unitYear", locale);
+  return t("me.unitMonth", locale);
 }
 
 /**
@@ -1161,19 +1113,18 @@ function TopChatsToolbar({
     const qs = next.toString();
     return qs ? `/me?${qs}` : "/me";
   };
+  const tr = (k: TKey) => t(k, locale);
   const topNOpts: MeTopN[] = [3, 5, 10];
   const rangeOpts: { key: MeTopRange; label: string }[] = [
-    { key: "all", label: locale === "zh" ? "全部" : "All" },
-    { key: "1y", label: locale === "zh" ? "近 1 年" : "1y" },
-    { key: "6m", label: locale === "zh" ? "近 6 月" : "6m" },
-    { key: "3m", label: locale === "zh" ? "近 3 月" : "3m" },
+    { key: "all", label: tr("me.rangeAll") },
+    { key: "1y", label: tr("me.range1y") },
+    { key: "6m", label: tr("me.range6m") },
+    { key: "3m", label: tr("me.range3m") },
   ];
   return (
     <div className="flex items-center gap-3 flex-wrap text-xs">
       <div className="inline-flex items-center gap-1.5">
-        <span className="text-muted-foreground">
-          {locale === "zh" ? "Top" : "Top"}
-        </span>
+        <span className="text-muted-foreground">{tr("me.toolbarTop")}</span>
         <div className="inline-flex rounded-md border border-border/60 p-[2px]">
           {topNOpts.map((n) => (
             <Link
@@ -1191,9 +1142,7 @@ function TopChatsToolbar({
         </div>
       </div>
       <div className="inline-flex items-center gap-1.5">
-        <span className="text-muted-foreground">
-          {locale === "zh" ? "范围" : "Range"}
-        </span>
+        <span className="text-muted-foreground">{tr("me.toolbarRange")}</span>
         <div className="inline-flex rounded-md border border-border/60 p-[2px]">
           {rangeOpts.map((o) => (
             <Link

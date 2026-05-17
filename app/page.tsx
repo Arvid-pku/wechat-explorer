@@ -4,6 +4,7 @@ import { getOverview } from "@/lib/queries";
 import { getRecapYears } from "@/lib/recap";
 import { getSurprises } from "@/lib/surprises";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { HeroCard } from "@/components/hero-card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDistanceToNow } from "date-fns";
@@ -71,9 +72,9 @@ export default async function Page() {
       </header>
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
+        <HeroCard
           href="/stats/sessions"
-          title={tr("overview.sessions")}
+          label={tr("overview.sessions")}
           value={fmtNum(o.sessions.total)}
           sub={
             <span className="text-xs text-muted-foreground space-x-2">
@@ -89,9 +90,9 @@ export default async function Page() {
             </span>
           }
         />
-        <StatCard
+        <HeroCard
           href="/stats/messages"
-          title={tr("overview.indexedMessages")}
+          label={tr("overview.indexedMessages")}
           value={fmtNum(o.messages.total)}
           sub={
             <span className="text-xs text-muted-foreground inline-flex items-center gap-1 flex-wrap">
@@ -106,9 +107,9 @@ export default async function Page() {
             </span>
           }
         />
-        <StatCard
+        <HeroCard
           href="/stats/links"
-          title={tr("overview.sharedLinks")}
+          label={tr("overview.sharedLinks")}
           value={fmtNum(o.urls.total)}
           sub={
             <span className="text-xs text-muted-foreground">
@@ -118,9 +119,9 @@ export default async function Page() {
             </span>
           }
         />
-        <StatCard
+        <HeroCard
           href="/stats/contacts"
-          title={tr("overview.contacts")}
+          label={tr("overview.contacts")}
           value={fmtNum(o.contacts)}
           sub={
             <span className="text-xs text-muted-foreground">
@@ -130,45 +131,102 @@ export default async function Page() {
         />
       </section>
 
-      <section className="grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>{tr("overview.activity365")}</CardTitle>
-            <CardDescription>{tr("overview.activity365Desc")}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ActivityChart data={o.activityByDay} />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>{tr("overview.msgTypes")}</CardTitle>
-            <CardDescription>{tr("overview.msgTypesDesc")}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <MsgTypeList rows={o.msgTypes} />
-          </CardContent>
-        </Card>
-      </section>
+      {o.messages.total === 0 ? (
+        <OnboardingCard locale={locale} />
+      ) : (
+        <>
+          <section className="grid gap-6 lg:grid-cols-3">
+            <Card className="lg:col-span-2">
+              <CardHeader>
+                <CardTitle>{tr("overview.activity365")}</CardTitle>
+                <CardDescription>{tr("overview.activity365Desc")}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ActivityChart data={o.activityByDay} />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>{tr("overview.msgTypes")}</CardTitle>
+                <CardDescription>{tr("overview.msgTypesDesc")}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <MsgTypeList rows={o.msgTypes} />
+              </CardContent>
+            </Card>
+          </section>
 
-      {/* Surprises is the slowest panel — split into its own Suspense so
-          the rest of the page streams in immediately. */}
-      <Suspense fallback={<SurprisesSkeleton locale={locale} />}>
-        <SurprisesPanel locale={locale} />
-      </Suspense>
+          {/* Surprises is the slowest panel — split into its own Suspense so
+              the rest of the page streams in immediately. */}
+          <Suspense fallback={<SurprisesSkeleton locale={locale} />}>
+            <SurprisesPanel locale={locale} />
+          </Suspense>
 
-      <section className="grid gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>{tr("overview.topLinks")}</CardTitle>
-            <CardDescription>{tr("overview.topLinksDesc")}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <TopDomainsBar rows={o.topDomains} />
-          </CardContent>
-        </Card>
-      </section>
+          <section className="grid gap-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>{tr("overview.topLinks")}</CardTitle>
+                <CardDescription>{tr("overview.topLinksDesc")}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <TopDomainsBar rows={o.topDomains} />
+              </CardContent>
+            </Card>
+          </section>
+        </>
+      )}
     </div>
+  );
+}
+
+function OnboardingCard({ locale }: { locale: Locale }) {
+  const tr = (k: TKey) => t(k, locale);
+  return (
+    <section className="mx-auto w-full max-w-2xl">
+      <Card className="border-primary/40">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Sparkles className="size-4 text-primary" /> {tr("onboarding.title")}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="space-y-2 text-sm text-muted-foreground">
+            <p>{tr("onboarding.line1")}</p>
+            <p>{tr("onboarding.line2")}</p>
+          </div>
+          <div>
+            <Link
+              href="/settings"
+              className="inline-flex items-center gap-2 rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:opacity-90"
+            >
+              <Sparkles className="size-3.5" /> {tr("onboarding.openSettings")}
+            </Link>
+          </div>
+          <ol className="space-y-2 text-sm">
+            <li className="flex items-start gap-3">
+              <span className="grid size-6 place-items-center rounded-full bg-muted text-xs font-semibold tabular-nums shrink-0">
+                1
+              </span>
+              <span className="pt-0.5">{tr("onboarding.step1")}</span>
+            </li>
+            <li className="flex items-start gap-3">
+              <span className="grid size-6 place-items-center rounded-full bg-muted text-xs font-semibold tabular-nums shrink-0">
+                2
+              </span>
+              <span className="pt-0.5">
+                <code className="text-xs px-1 py-0.5 rounded bg-muted/60">sudo wx init</code>{" "}
+              </span>
+            </li>
+            <li className="flex items-start gap-3">
+              <span className="grid size-6 place-items-center rounded-full bg-muted text-xs font-semibold tabular-nums shrink-0">
+                3
+              </span>
+              <span className="pt-0.5">{tr("onboarding.step3")}</span>
+            </li>
+          </ol>
+        </CardContent>
+      </Card>
+    </section>
   );
 }
 
@@ -260,40 +318,3 @@ function PeriodDelta({ current, prior }: { current: number; prior: number }) {
   );
 }
 
-function StatCard({
-  title,
-  value,
-  sub,
-  href,
-}: {
-  title: string;
-  value: string;
-  sub?: React.ReactNode;
-  href?: string;
-}) {
-  const inner = (
-    <Card className={href ? "h-full transition-colors hover:border-primary/40 cursor-pointer" : "h-full"}>
-      <CardHeader className="pb-2">
-        <CardDescription className="inline-flex items-center gap-1">
-          {title}
-          {href && (
-            <span className="text-muted-foreground/60 text-[10px] transition-opacity group-hover:opacity-100 opacity-50">
-              ↗
-            </span>
-          )}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-1.5">
-        <div className="text-3xl font-semibold tracking-tight">{value}</div>
-        {sub}
-      </CardContent>
-    </Card>
-  );
-  return href ? (
-    <Link href={href} className="group block">
-      {inner}
-    </Link>
-  ) : (
-    inner
-  );
-}

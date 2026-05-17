@@ -1,17 +1,17 @@
 import { Suspense } from "react";
-import { getDb, dbPath, getMeta } from "@/lib/db";
+import { dbPath, getMeta } from "@/lib/db";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDistanceToNow } from "date-fns";
 import { statSync } from "node:fs";
 import { ReindexButtons } from "./reindex-buttons";
 import { HygienePanel } from "./hygiene-panel";
-import { listArchiveCandidates, listArchived, ensureMeDetected, detectMeHandles, ensureDistinctSendersBackfilled } from "@/lib/queries";
+import { listArchiveCandidates, listArchived, ensureMeDetected, detectMeHandles, ensureDistinctSendersBackfilled, getSettingsCounts } from "@/lib/queries";
 import { getCacheStats } from "@/lib/cache";
 import { CachePanel } from "./cache-panel";
-import { AlertTriangle, Languages } from "lucide-react";
+import { AlertTriangle, Languages, Clock } from "lucide-react";
 import { LanguagePanel } from "./language-panel";
-import { t, type TKey } from "@/lib/i18n";
+import { t, tf, type Locale, type TKey } from "@/lib/i18n";
 import { getServerLocale } from "@/lib/i18n-server";
 
 export const dynamic = "force-dynamic";
@@ -31,33 +31,23 @@ export default async function SettingsPage() {
   const tr = (k: TKey) => t(k, locale);
   const lastQuick = getMeta("last_quick_index_at");
   const lastDeep = getMeta("last_deep_index_at");
-  const db = getDb();
   const path = dbPath();
   let sizeMB = "—";
   try {
     sizeMB = (statSync(path).size / 1024 / 1024).toFixed(1);
   } catch {}
 
-  const counts = db
-    .prepare(
-      `SELECT
-         (SELECT COUNT(*) FROM sessions) AS sessions,
-         (SELECT COUNT(*) FROM sessions WHERE archived = 1) AS archived,
-         (SELECT COUNT(*) FROM contacts) AS contacts,
-         (SELECT COUNT(*) FROM messages) AS messages,
-         (SELECT COUNT(*) FROM urls) AS urls,
-         (SELECT COUNT(*) FROM messages WHERE chat_username IS NULL) AS messages_unmatched,
-         (SELECT COUNT(*) FROM urls WHERE chat_username IS NULL) AS urls_unmatched`,
-    )
-    .get() as {
-    sessions: number;
-    archived: number;
-    contacts: number;
-    messages: number;
-    urls: number;
-    messages_unmatched: number;
-    urls_unmatched: number;
-  };
+  // Cached aggregate — invalidated on next index epoch. Without this, every
+  // Settings render runs five full-table COUNT(*)s (~6s cold on a 1M-msg DB).
+  const counts = getSettingsCounts();
+
+  // Suggest a Deep index when none has ever run or the last one was >30 days
+  // ago. Deep indexing rebuilds full-text search and the contact analytics,
+  // and a stale index is the most common reason "/me" or "/contacts/<u>"
+  // looks empty for a chat the user is actively using.
+  const deepAgeMs = lastDeep ? Date.now() - Number(lastDeep) : null;
+  const STALE_DEEP_MS = 30 * 24 * 60 * 60 * 1000;
+  const deepStale = !lastDeep || (deepAgeMs !== null && deepAgeMs > STALE_DEEP_MS);
 
   const { handles: meHandles } = ensureMeDetected();
   ensureDistinctSendersBackfilled();
@@ -85,52 +75,69 @@ export default async function SettingsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Index status</CardTitle>
-          <CardDescription>Trigger fresh indexing runs against your local WeChat data.</CardDescription>
+          <CardTitle>{tr("settings.indexStatus")}</CardTitle>
+          <CardDescription>{tr("settings.indexStatusDesc")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <dl className="grid grid-cols-2 gap-y-3 text-sm">
-            <dt className="text-muted-foreground">Last quick index</dt>
+            <dt className="text-muted-foreground">{tr("settings.lastQuickIndex")}</dt>
             <dd className="text-right tabular-nums">
               {lastQuick
                 ? formatDistanceToNow(new Date(Number(lastQuick)), { addSuffix: true })
-                : "Never"}
+                : tr("settings.never")}
             </dd>
-            <dt className="text-muted-foreground">Last deep index</dt>
+            <dt className="text-muted-foreground">{tr("settings.lastDeepIndex")}</dt>
             <dd className="text-right tabular-nums">
               {lastDeep
                 ? formatDistanceToNow(new Date(Number(lastDeep)), { addSuffix: true })
-                : "Never"}
+                : tr("settings.never")}
             </dd>
-            <dt className="text-muted-foreground">Sessions</dt>
+            <dt className="text-muted-foreground">{tr("settings.sessions")}</dt>
             <dd className="text-right tabular-nums">
               {(counts.sessions - counts.archived).toLocaleString()}
               {counts.archived > 0 && (
-                <span className="text-muted-foreground"> · {counts.archived} archived</span>
+                <span className="text-muted-foreground">
+                  {" "}· {counts.archived} {tr("settings.archivedSuffix")}
+                </span>
               )}
             </dd>
-            <dt className="text-muted-foreground">Messages</dt>
+            <dt className="text-muted-foreground">{tr("settings.messages")}</dt>
             <dd className="text-right tabular-nums">{counts.messages.toLocaleString()}</dd>
-            <dt className="text-muted-foreground">URLs</dt>
+            <dt className="text-muted-foreground">{tr("settings.urls")}</dt>
             <dd className="text-right tabular-nums">{counts.urls.toLocaleString()}</dd>
-            <dt className="text-muted-foreground">Contacts</dt>
+            <dt className="text-muted-foreground">{tr("settings.contacts")}</dt>
             <dd className="text-right tabular-nums">{counts.contacts.toLocaleString()}</dd>
           </dl>
+
+          {deepStale && (
+            <div className="flex gap-3 items-start rounded-md border border-sky-500/30 bg-sky-50/60 dark:bg-sky-900/10 px-3 py-2.5 text-xs">
+              <Clock className="size-4 shrink-0 text-sky-600 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-medium text-sky-900 dark:text-sky-200">
+                  {tr("settings.deepStaleTitle")}
+                </p>
+                <p className="text-muted-foreground">
+                  {lastDeep
+                    ? tf("settings.deepStaleDesc", locale, {
+                        ago: formatDistanceToNow(new Date(Number(lastDeep)), { addSuffix: true }),
+                      })
+                    : tr("settings.deepNeverDesc")}
+                </p>
+              </div>
+            </div>
+          )}
 
           {(counts.messages_unmatched > 0 || counts.urls_unmatched > 0) && (
             <div className="flex gap-3 items-start rounded-md border border-amber-500/30 bg-amber-50/60 dark:bg-amber-900/10 px-3 py-2.5 text-xs">
               <AlertTriangle className="size-4 shrink-0 text-amber-600 mt-0.5" />
               <div className="space-y-1">
                 <p className="font-medium text-amber-900 dark:text-amber-200">
-                  {counts.messages_unmatched.toLocaleString()} messages and{" "}
-                  {counts.urls_unmatched.toLocaleString()} URLs aren&apos;t linked to a session
+                  {tf("settings.unmatchedTitle", locale, {
+                    m: counts.messages_unmatched.toLocaleString(),
+                    u: counts.urls_unmatched.toLocaleString(),
+                  })}
                 </p>
-                <p className="text-muted-foreground">
-                  Backfill skips ambiguous matches — most often display names shared by
-                  multiple sessions in WeChat (e.g. several &ldquo;工作群&rdquo;).
-                  These rows are still searchable but won&apos;t roll up into a contact
-                  page. Rename the colliding contacts in WeChat to recover them.
-                </p>
+                <p className="text-muted-foreground">{tr("settings.unmatchedDesc")}</p>
               </div>
             </div>
           )}
@@ -139,7 +146,7 @@ export default async function SettingsPage() {
         </CardContent>
       </Card>
 
-      <Suspense fallback={<HygienePanelSkeleton />}>
+      <Suspense fallback={<HygienePanelSkeleton locale={locale} />}>
         <HygienePanelLoader meHandles={meHandles} meRankings={meRankings} />
       </Suspense>
 
@@ -147,17 +154,19 @@ export default async function SettingsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Storage</CardTitle>
-          <CardDescription>Where the explorer keeps its derived index.</CardDescription>
+          <CardTitle>{tr("settings.storage")}</CardTitle>
+          <CardDescription>{tr("settings.storageDesc")}</CardDescription>
         </CardHeader>
         <CardContent>
           <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">Index path</dt>
+            <dt className="text-muted-foreground">{tr("settings.indexPath")}</dt>
             <dd className="font-mono text-xs break-all">{path}</dd>
-            <dt className="text-muted-foreground">Index size</dt>
+            <dt className="text-muted-foreground">{tr("settings.indexSize")}</dt>
             <dd className="tabular-nums">{sizeMB} MB</dd>
-            <dt className="text-muted-foreground">Source DB</dt>
-            <dd className="text-muted-foreground">Read-only via <code>wx-cli</code></dd>
+            <dt className="text-muted-foreground">{tr("settings.sourceDb")}</dt>
+            <dd className="text-muted-foreground">
+              {tr("settings.sourceDbValue")} <code>wx-cli</code>
+            </dd>
           </dl>
         </CardContent>
       </Card>
@@ -201,12 +210,13 @@ async function HygienePanelLoader({
   );
 }
 
-function HygienePanelSkeleton() {
+function HygienePanelSkeleton({ locale }: { locale: Locale }) {
+  const tr = (k: TKey) => t(k, locale);
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Chat hygiene</CardTitle>
-        <CardDescription>Loading archive candidates…</CardDescription>
+        <CardTitle>{tr("settings.hygieneTitle")}</CardTitle>
+        <CardDescription>{tr("settings.hygieneLoading")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <Skeleton className="h-9 w-full" />

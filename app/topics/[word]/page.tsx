@@ -13,6 +13,8 @@ import { Separator } from "@/components/ui/separator";
 import { LineWithBars } from "@/components/charts/stats/bars";
 import { format, formatDistanceToNow } from "date-fns";
 import { ArrowLeft, MessageSquare, Calendar, Sparkles } from "lucide-react";
+import { t, tf, type TKey } from "@/lib/i18n";
+import { getServerLocale } from "@/lib/i18n-server";
 
 export const dynamic = "force-dynamic";
 
@@ -26,9 +28,11 @@ export default async function TopicPage({
   params: Promise<{ word: string }>;
 }) {
   const { word: rawWord } = await params;
+  const locale = await getServerLocale();
+  const tr = (k: TKey) => t(k, locale);
   const word = decodeURIComponent(rawWord);
-  const t = getTopicTimeline(word);
-  if (!t) return notFound();
+  const timeline = getTopicTimeline(word);
+  if (!timeline) return notFound();
 
   const dayStr = (ts: number) => {
     const d = new Date(ts * 1000);
@@ -41,58 +45,55 @@ export default async function TopicPage({
         href="/search"
         className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
       >
-        <ArrowLeft className="size-3.5 mr-1" /> Back to search
+        <ArrowLeft className="size-3.5 mr-1" /> {tr("topic.backToSearch")}
       </Link>
 
       <header className="space-y-2">
-        <p className="text-xs uppercase tracking-widest text-muted-foreground">Topic timeline</p>
+        <p className="text-xs uppercase tracking-widest text-muted-foreground">{tr("topic.timeline")}</p>
         <h1 className="text-3xl font-semibold tracking-tight flex items-center gap-2 flex-wrap">
           <span className="font-mono px-2 py-0.5 rounded-md bg-muted">{word}</span>
-          <Badge variant={t.fts ? "secondary" : "outline"} className="font-normal">
-            {t.fts ? "FTS5" : "LIKE fallback"}
+          <Badge variant={timeline.fts ? "secondary" : "outline"} className="font-normal">
+            {timeline.fts ? tr("topic.fts5") : tr("topic.likeFallback")}
           </Badge>
         </h1>
-        {t.total === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No indexed messages contain &quot;{word}&quot;.
-          </p>
+        {timeline.total === 0 ? (
+          <p className="text-sm text-muted-foreground">{tf("topic.noMatches", locale, { word })}</p>
         ) : (
           <p className="text-sm text-muted-foreground">
-            {fmt(t.total)} occurrences across the corpus
-            {t.firstSeen && (
+            {tf("topic.occurrences", locale, { n: fmt(timeline.total) })}
+            {timeline.firstSeen && (
               <>
-                {" · first appeared "}
+                {" · "}
+                {tr("topic.firstAppeared")}{" "}
                 <span className="font-medium">
-                  {formatDistanceToNow(new Date(t.firstSeen * 1000), { addSuffix: true })}
+                  {formatDistanceToNow(new Date(timeline.firstSeen * 1000), { addSuffix: true })}
                 </span>{" "}
-                ({format(new Date(t.firstSeen * 1000), "MMM d, yyyy")})
+                ({format(new Date(timeline.firstSeen * 1000), "MMM d, yyyy")})
               </>
             )}
           </p>
         )}
       </header>
 
-      {t.total === 0 ? (
+      {timeline.total === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            Try a different spelling, or{" "}
+            {tr("topic.trySpelling")}{" "}
             <Link href={`/search?q=${encodeURIComponent(word)}`} className="underline">
-              search messages
+              {tr("topic.searchMessages")}
             </Link>{" "}
-            for surrounding context.
+            {tr("topic.forContext")}
           </CardContent>
         </Card>
       ) : (
         <>
           <Card>
             <CardHeader>
-              <CardTitle>Over time</CardTitle>
-              <CardDescription>
-                Monthly occurrences. Useful to spot when a topic showed up in your life.
-              </CardDescription>
+              <CardTitle>{tr("topic.overTime")}</CardTitle>
+              <CardDescription>{tr("topic.overTimeDesc")}</CardDescription>
             </CardHeader>
             <CardContent>
-              <LineWithBars data={t.monthly.map((m) => ({ label: m.ym, n: m.n }))} />
+              <LineWithBars data={timeline.monthly.map((m) => ({ label: m.ym, n: m.n }))} />
             </CardContent>
           </Card>
 
@@ -100,15 +101,15 @@ export default async function TopicPage({
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <MessageSquare className="size-4" /> Top chats
+                  <MessageSquare className="size-4" /> {tr("topic.topChats")}
                 </CardTitle>
-                <CardDescription>Where this word lives most.</CardDescription>
+                <CardDescription>{tr("topic.topChatsDesc")}</CardDescription>
               </CardHeader>
               <CardContent>
-                {t.topChats.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No chat breakdown.</p>
+                {timeline.topChats.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">{tr("topic.topChatsEmpty")}</p>
                 ) : (
-                  <TopChatsList rows={t.topChats} word={word} />
+                  <TopChatsList rows={timeline.topChats} word={word} />
                 )}
               </CardContent>
             </Card>
@@ -116,46 +117,44 @@ export default async function TopicPage({
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Sparkles className="size-4" /> Top senders
+                  <Sparkles className="size-4" /> {tr("topic.topSenders")}
                 </CardTitle>
-                <CardDescription>Who says it most.</CardDescription>
+                <CardDescription>{tr("topic.topSendersDesc")}</CardDescription>
               </CardHeader>
               <CardContent>
-                {t.topSenders.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No sender breakdown.</p>
+                {timeline.topSenders.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">{tr("topic.topSendersEmpty")}</p>
                 ) : (
-                  <TopSendersList rows={t.topSenders} word={word} />
+                  <TopSendersList rows={timeline.topSenders} word={word} />
                 )}
               </CardContent>
             </Card>
           </section>
 
-          {t.firstSamples.length > 0 && (
+          {timeline.firstSamples.length > 0 && (
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Calendar className="size-4" /> First appearances
+                  <Calendar className="size-4" /> {tr("topic.firstAppearances")}
                 </CardTitle>
-                <CardDescription>
-                  The earliest indexed messages mentioning this word.
-                </CardDescription>
+                <CardDescription>{tr("topic.firstAppearancesDesc")}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                {t.firstSamples.map((s) => (
+                {timeline.firstSamples.map((s) => (
                   <SampleRow key={s.id} sample={s} dayStr={dayStr} />
                 ))}
               </CardContent>
             </Card>
           )}
 
-          {t.recentSamples.length > 0 && (
+          {timeline.recentSamples.length > 0 && (
             <Card>
               <CardHeader>
-                <CardTitle>Recent mentions</CardTitle>
-                <CardDescription>Most recent ten.</CardDescription>
+                <CardTitle>{tr("topic.recentMentions")}</CardTitle>
+                <CardDescription>{tr("topic.recentMentionsDesc")}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                {t.recentSamples.map((s) => (
+                {timeline.recentSamples.map((s) => (
                   <SampleRow key={s.id} sample={s} dayStr={dayStr} />
                 ))}
               </CardContent>

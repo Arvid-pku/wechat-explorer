@@ -6,6 +6,8 @@ import { getMessageContext, type MessageRow } from "@/lib/queries";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { t, tf, type Locale, type TKey } from "@/lib/i18n";
+import { getServerLocale } from "@/lib/i18n-server";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +17,8 @@ export default async function MessagePermalinkPage({
   params: Promise<{ id: string }>;
 }) {
   const { id: rawId } = await params;
+  const locale = await getServerLocale();
+  const tr = (k: TKey) => t(k, locale);
   const id = Number(rawId);
   if (!Number.isFinite(id) || !Number.isInteger(id) || id <= 0) return notFound();
 
@@ -49,14 +53,14 @@ export default async function MessagePermalinkPage({
             href={chatHref}
             className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
           >
-            <ArrowLeft className="size-3.5 mr-1" /> Back to {chatDisplay}
+            <ArrowLeft className="size-3.5 mr-1" /> {tf("messages.backTo", locale, { name: chatDisplay })}
           </Link>
         ) : (
           <Link
             href="/contacts"
             className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
           >
-            <ArrowLeft className="size-3.5 mr-1" /> Contacts
+            <ArrowLeft className="size-3.5 mr-1" /> {tr("nav.contacts")}
           </Link>
         )}
       </div>
@@ -73,13 +77,13 @@ export default async function MessagePermalinkPage({
           {session && <Badge variant="secondary">{session.chat_type}</Badge>}
           {!session && target.chat_username === null && (
             <Badge variant="outline" className="text-muted-foreground">
-              unlinked chat
+              {tr("messages.unlinkedChat")}
             </Badge>
           )}
         </h1>
         <p className="text-sm text-muted-foreground flex items-center gap-2 flex-wrap">
           <MessageSquare className="size-3.5" />
-          Message #{target.id}
+          {tr("messages.message")} #{target.id}
           <span>·</span>
           <Link
             href={calendarHref}
@@ -93,39 +97,33 @@ export default async function MessagePermalinkPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>Context</CardTitle>
+          <CardTitle>{tr("messages.contextTitle")}</CardTitle>
           <CardDescription>
-            {before.length} before · target · {after.length} after
+            {tf("messages.contextDesc", locale, { before: before.length, after: after.length })}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
           {before.length === 0 && after.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No surrounding messages indexed for this chat.
-            </p>
+            <p className="text-sm text-muted-foreground">{tr("messages.contextEmpty")}</p>
           ) : (
             <>
-              <Section label="Before">
+              <Section label={tr("messages.before")}>
                 {before.length === 0 ? (
-                  <p className="text-xs text-muted-foreground py-2">
-                    Nothing older indexed in this chat.
-                  </p>
+                  <p className="text-xs text-muted-foreground py-2">{tr("messages.beforeEmpty")}</p>
                 ) : (
-                  before.map((m) => <MessageRowView key={m.id} m={m} />)
+                  before.map((m) => <MessageRowView key={m.id} m={m} locale={locale} />)
                 )}
               </Section>
 
               <Separator className="my-2" />
-              <MessageRowView m={target} highlight />
+              <MessageRowView m={target} highlight locale={locale} />
               <Separator className="my-2" />
 
-              <Section label="After">
+              <Section label={tr("messages.after")}>
                 {after.length === 0 ? (
-                  <p className="text-xs text-muted-foreground py-2">
-                    Nothing newer indexed in this chat.
-                  </p>
+                  <p className="text-xs text-muted-foreground py-2">{tr("messages.afterEmpty")}</p>
                 ) : (
-                  after.map((m) => <MessageRowView key={m.id} m={m} />)
+                  after.map((m) => <MessageRowView key={m.id} m={m} locale={locale} />)
                 )}
               </Section>
             </>
@@ -138,23 +136,23 @@ export default async function MessagePermalinkPage({
           href={calendarHref}
           className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-1.5 hover:bg-accent"
         >
-          <CalendarDays className="size-3.5" /> Open in calendar
+          <CalendarDays className="size-3.5" /> {tr("messages.openInCalendar")}
         </Link>
         {chatHref && (
           <Link
             href={chatHref}
             className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-1.5 hover:bg-accent"
           >
-            <User className="size-3.5" /> Open contact
+            <User className="size-3.5" /> {tr("messages.openContact")}
           </Link>
         )}
         {searchHref && (
           <Link
             href={searchHref}
             className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-1.5 hover:bg-accent"
-            title={`Search for "${searchSnippet}"`}
+            title={tf("messages.searchTooltip", locale, { q: searchSnippet })}
           >
-            <Search className="size-3.5" /> Search this message
+            <Search className="size-3.5" /> {tr("messages.searchMessage")}
           </Link>
         )}
       </div>
@@ -173,7 +171,16 @@ function Section({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-function MessageRowView({ m, highlight }: { m: MessageRow; highlight?: boolean }) {
+function MessageRowView({
+  m,
+  highlight,
+  locale,
+}: {
+  m: MessageRow;
+  highlight?: boolean;
+  locale: Locale;
+}) {
+  const tr = (k: TKey) => t(k, locale);
   const d = new Date(m.timestamp * 1000);
   const dayStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
     d.getDate(),
@@ -212,7 +219,7 @@ function MessageRowView({ m, highlight }: { m: MessageRow; highlight?: boolean }
           <Link
             href={`/messages/${m.id}`}
             className="tabular-nums hover:text-foreground hover:underline"
-            title="Open permalink"
+            title={tr("messages.permalink")}
           >
             {format(d, "HH:mm")}
           </Link>
@@ -220,7 +227,7 @@ function MessageRowView({ m, highlight }: { m: MessageRow; highlight?: boolean }
         <Link
           href={calendarHref}
           className="tabular-nums hover:text-foreground hover:underline opacity-70"
-          title="Open this day in the calendar"
+          title={tr("messages.openDayInCal")}
         >
           {format(d, "MMM d")}
         </Link>

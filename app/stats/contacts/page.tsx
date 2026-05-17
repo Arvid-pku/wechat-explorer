@@ -3,6 +3,8 @@ import { ArrowLeft, Users, UserPlus, UserCheck, UserX, UsersRound } from "lucide
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getContactsStats } from "@/lib/stats";
 import { Donut, VerticalBars } from "@/components/charts/stats/charts";
+import { t, tf, type TKey } from "@/lib/i18n";
+import { getServerLocale } from "@/lib/i18n-server";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +13,8 @@ function fmt(n: number) {
 }
 
 export default async function ContactsStatsPage() {
+  const locale = await getServerLocale();
+  const tr = (k: TKey) => t(k, locale);
   const s = getContactsStats();
   const directPct = s.total > 0 ? (s.directMessaged / s.total) * 100 : 0;
   const groupOnlyPct = s.total > 0 ? (s.groupOnly / s.total) * 100 : 0;
@@ -20,17 +24,18 @@ export default async function ContactsStatsPage() {
     <div className="mx-auto w-full max-w-6xl px-6 py-8 space-y-8">
       <header className="space-y-3">
         <Link href="/" className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="size-3.5 mr-1" /> Overview
+          <ArrowLeft className="size-3.5 mr-1" /> {tr("common.backToOverview")}
         </Link>
         <div>
-          <p className="text-xs uppercase tracking-widest text-muted-foreground">Address book breakdown</p>
+          <p className="text-xs uppercase tracking-widest text-muted-foreground">{tr("stats.contacts.eyebrow")}</p>
           <h1 className="text-4xl font-semibold tracking-tight mt-1">
-            {fmt(s.total)} <span className="text-muted-foreground text-2xl font-normal">contacts</span>
+            {fmt(s.total)}{" "}
+            <span className="text-muted-foreground text-2xl font-normal">{tr("stats.contacts.heroSuffix")}</span>
           </h1>
           <p className="text-sm text-muted-foreground mt-3 max-w-2xl">
-            That number is large because WeChat counts <strong>every group-chat member you&apos;ve ever
-            encountered</strong>, not just your accepted friends. Below is the breakdown — most are people
-            you&apos;ve never sent a direct message to.
+            {tr("stats.contacts.heroDescPre")}
+            <strong>{tr("stats.contacts.heroDescStrong")}</strong>
+            {tr("stats.contacts.heroDescSuffix")}
           </p>
         </div>
       </header>
@@ -39,27 +44,27 @@ export default async function ContactsStatsPage() {
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Tile
           icon={<UserCheck className="size-4" />}
-          label="Directly messaged"
+          label={tr("stats.contacts.tileDirect")}
           value={fmt(s.directMessaged)}
-          sub={`${directPct.toFixed(1)}% of address book`}
+          sub={`${directPct.toFixed(1)}% ${tr("stats.contacts.tileDirectSub")}`}
         />
         <Tile
           icon={<UsersRound className="size-4" />}
-          label="In groups with you"
+          label={tr("stats.contacts.tileInGroups")}
           value={fmt(s.inGroupsWithYou)}
-          sub="member of ≥ 1 of your groups"
+          sub={tr("stats.contacts.tileInGroupsSub")}
         />
         <Tile
           icon={<Users className="size-4" />}
-          label="Group-only acquaintances"
+          label={tr("stats.contacts.tileGroupOnly")}
           value={fmt(s.groupOnly)}
-          sub={`${groupOnlyPct.toFixed(1)}% — never DM'd`}
+          sub={tf("stats.contacts.tileGroupOnlySub", locale, { pct: `${groupOnlyPct.toFixed(1)}%` })}
         />
         <Tile
           icon={<UserX className="size-4" />}
-          label="Silent contacts"
+          label={tr("stats.contacts.tileSilent")}
           value={fmt(s.unconnected)}
-          sub={`${unconnectedPct.toFixed(1)}% — no chat, no group`}
+          sub={tf("stats.contacts.tileSilentSub", locale, { pct: `${unconnectedPct.toFixed(1)}%` })}
         />
       </section>
 
@@ -67,18 +72,16 @@ export default async function ContactsStatsPage() {
       <section className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>How you know each contact</CardTitle>
-            <CardDescription>
-              Split by whether you have a 1:1 chat with them, only share group(s), or neither.
-            </CardDescription>
+            <CardTitle>{tr("stats.contacts.howKnowTitle")}</CardTitle>
+            <CardDescription>{tr("stats.contacts.howKnowDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <Donut
-              centerLabel={{ title: "contacts", value: fmt(s.total) }}
+              centerLabel={{ title: tr("stats.contacts.donutCenter"), value: fmt(s.total) }}
               data={[
-                { name: "Direct chat", value: s.directMessaged },
-                { name: "Group only", value: s.groupOnly },
-                { name: "Silent (no chat)", value: s.unconnected },
+                { name: tr("stats.contacts.howKnowDirect"), value: s.directMessaged },
+                { name: tr("stats.contacts.howKnowGroup"), value: s.groupOnly },
+                { name: tr("stats.contacts.howKnowSilent"), value: s.unconnected },
               ]}
             />
           </CardContent>
@@ -86,10 +89,8 @@ export default async function ContactsStatsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Group overlap distribution</CardTitle>
-            <CardDescription>
-              Of contacts who share at least one group with you, how many groups do you co-inhabit?
-            </CardDescription>
+            <CardTitle>{tr("stats.contacts.groupDistTitle")}</CardTitle>
+            <CardDescription>{tr("stats.contacts.groupDistDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <VerticalBars data={s.groupMembershipBuckets.map((b) => ({ label: b.label, value: b.n }))} height={240} />
@@ -100,10 +101,8 @@ export default async function ContactsStatsPage() {
       <section className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Address book vs sessions</CardTitle>
-            <CardDescription>
-              Three-way split: in contacts only, in both, or only as a session row.
-            </CardDescription>
+            <CardTitle>{tr("stats.contacts.bookVsSessTitle")}</CardTitle>
+            <CardDescription>{tr("stats.contacts.bookVsSessDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <Donut
@@ -116,17 +115,13 @@ export default async function ContactsStatsPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <UserPlus className="size-4 text-primary" />
-              Most-overlapping people
+              {tr("stats.contacts.overlapTitle")}
             </CardTitle>
-            <CardDescription>
-              Ranked by how many of your groups they sit in. Often classmates, colleagues, or family.
-            </CardDescription>
+            <CardDescription>{tr("stats.contacts.overlapDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             {s.topGroupOverlapPeople.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No group membership data indexed yet — backfill via Settings → Fetch member counts.
-              </p>
+              <p className="text-sm text-muted-foreground">{tr("stats.contacts.overlapEmpty")}</p>
             ) : (
               <ul className="space-y-2 text-sm">
                 {s.topGroupOverlapPeople.map((p) => (
@@ -138,7 +133,7 @@ export default async function ContactsStatsPage() {
                       {p.display_name}
                     </Link>
                     <span className="text-xs text-muted-foreground tabular-nums">
-                      {p.groups} groups
+                      {p.groups} {tr("stats.contacts.groupsSuffix")}
                     </span>
                   </li>
                 ))}
@@ -149,9 +144,7 @@ export default async function ContactsStatsPage() {
       </section>
 
       <p className="text-xs text-muted-foreground text-center">
-        Definitions: <em>direct chat</em> = a session with chat_type=&quot;private&quot;.{" "}
-        <em>Group only</em> = appears in your group_members but no 1:1 session.{" "}
-        <em>Silent</em> = no session and no shared group — usually old or never-acted-on contacts.
+        {tr("stats.contacts.legend")}
       </p>
     </div>
   );

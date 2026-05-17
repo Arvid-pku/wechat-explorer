@@ -10,6 +10,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
 import { Archive, UserCircle2, X } from "lucide-react";
 import Link from "next/link";
+import { useLocale } from "@/components/i18n-provider";
+import { t, tf, type TKey } from "@/lib/i18n";
 
 interface Result {
   id: number;
@@ -31,6 +33,8 @@ export function SearchView({
 } = {}) {
   const router = useRouter();
   const sp = useSearchParams();
+  const { locale } = useLocale();
+  const tr = (k: TKey) => t(k, locale);
   const qParam = sp.get("q") ?? "";
   const chatParam = sp.get("chat") ?? "";
   const includeArchived = sp.get("archived") === "1";
@@ -93,7 +97,7 @@ export function SearchView({
         <div className="flex-1 min-w-[260px]">
           <Input
             autoFocus
-            placeholder="Search messages…"
+            placeholder={tr("search.placeholder")}
             value={value}
             onChange={(e) => setValue(e.target.value)}
             className="h-12 text-base"
@@ -108,20 +112,16 @@ export function SearchView({
                 : "border-border/60 text-muted-foreground hover:text-foreground hover:bg-accent"
             }`
           }
-          title={
-            includeArchived
-              ? "Including archived chats in results"
-              : "Click to also search archived chats"
-          }
+          title={includeArchived ? tr("search.archivedTitle") : tr("search.archivedClickToggle")}
         >
           <Archive className="size-3.5" />
-          {includeArchived ? "Archived shown" : "Include archived"}
+          {includeArchived ? tr("search.archivedShown") : tr("search.includeArchived")}
         </button>
       </div>
       {scopeUsername && (
         <div className="flex items-center gap-2 flex-wrap rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
           <UserCircle2 className="size-3.5 text-primary" />
-          <span className="text-muted-foreground">Filtered to chat:</span>
+          <span className="text-muted-foreground">{tr("search.filteredTo")}</span>
           <Link
             href={`/contacts/${encodeURIComponent(scopeUsername)}`}
             className="font-medium text-foreground hover:underline truncate max-w-[40ch]"
@@ -131,15 +131,13 @@ export function SearchView({
           <button
             onClick={clearChatScope}
             className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-            title="Clear chat filter"
+            title={tr("search.clearFilter")}
           >
-            <X className="size-3" /> clear
+            <X className="size-3" /> {tr("calendar.clear")}
           </button>
         </div>
       )}
-      <p className="text-xs text-muted-foreground">
-        Powered by SQLite FTS5 with trigram tokenizer — short CJK queries fall back to LIKE.
-      </p>
+      <p className="text-xs text-muted-foreground">{tr("search.poweredBy")}</p>
 
       {error && (
         <Card>
@@ -152,8 +150,8 @@ export function SearchView({
       {!debounced.trim() ? (
         <Card>
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            Type at least one character to search across {""}
-            <strong>indexed messages</strong>.
+            {tr("search.empty")}{" "}
+            <strong>{tr("search.emptyStrong")}</strong>.
           </CardContent>
         </Card>
       ) : isFetching && !data ? (
@@ -163,7 +161,7 @@ export function SearchView({
           <CardContent className="p-0 divide-y divide-border/40">
             {(data?.results ?? []).length === 0 ? (
               <p className="px-6 py-12 text-center text-sm text-muted-foreground">
-                No matches for &quot;{debounced}&quot;.
+                {tf("search.noMatch", locale, { q: debounced })}
               </p>
             ) : (
               data!.results.map((r) => (
@@ -192,8 +190,8 @@ export function SearchView({
                         className="hover:text-foreground hover:underline"
                         title={
                           chatParam
-                            ? `Search for ${r.sender} within this chat`
-                            : `Search for ${r.sender}`
+                            ? tf("search.searchForSenderInChat", locale, { sender: r.sender })
+                            : tf("search.searchForSender", locale, { sender: r.sender })
                         }
                       >
                         {r.sender}
@@ -220,16 +218,16 @@ export function SearchView({
                           <Link
                             href={`/messages/${r.id}`}
                             className="tabular-nums hover:text-foreground hover:underline"
-                            title={`Permalink · also opens day ${day} via the calendar link`}
+                            title={tf("search.permalinkDay", locale, { day })}
                           >
                             {format(d, "MMM d, yyyy HH:mm")}
                           </Link>
                           <Link
                             href={calHref}
                             className="text-muted-foreground/70 hover:text-foreground hover:underline text-[10px]"
-                            title="Open this day in the calendar"
+                            title={tr("search.openDayCal")}
                           >
-                            day
+                            {tr("search.dayShort")}
                           </Link>
                         </>
                       );

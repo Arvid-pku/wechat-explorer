@@ -4,6 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDistanceToNow } from "date-fns";
 import { LinkIcon } from "lucide-react";
 import { ArchivedFilterPill, buildArchivedFilterHref } from "@/components/archived-filter-pill";
+import { t, tf, type TKey } from "@/lib/i18n";
+import { getServerLocale } from "@/lib/i18n-server";
 
 export const dynamic = "force-dynamic";
 
@@ -32,31 +34,46 @@ const GROUP_LABELS: Record<string, string> = {
 export default async function LinksIndex({
   searchParams,
 }: {
-  searchParams: Promise<{ archived?: string }>;
+  searchParams: Promise<{ archived?: string; show?: string }>;
 }) {
   const sp = await searchParams;
+  const locale = await getServerLocale();
+  const tr = (k: TKey) => t(k, locale);
   const includeArchived = sp.archived === "1";
+  const showAll = sp.show === "all";
   const groups = getLinkGroups({ includeArchived });
   const grandTotal = groups.reduce((a, b) => a + b.n, 0);
+
+  // Collapse the long tail by default — hundreds of domain groups makes the
+  // HTML payload >3 MB and noisy. Show the top 60 (by count, already the
+  // sort order from getLinkGroups) plus a "Show all" link. The cutoff also
+  // applies the "low-n" tail collapse implicitly because the sort is by n DESC.
+  const TOP_N = 60;
+  const visible = showAll ? groups : groups.slice(0, TOP_N);
+  const hiddenCount = Math.max(0, groups.length - visible.length);
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-6">
       <header className="flex items-end justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Links</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{tr("links.title")}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {grandTotal.toLocaleString()} shared links across {groups.length.toLocaleString()} domain groups
-            {includeArchived ? " (including archived)" : ""}
+            {tf("links.summary", locale, {
+              n: grandTotal.toLocaleString(),
+              groups: groups.length.toLocaleString(),
+            })}
+            {includeArchived ? tr("links.includingArchived") : ""}
           </p>
         </div>
         <ArchivedFilterPill
           on={includeArchived}
           href={buildArchivedFilterHref("/links", sp, includeArchived)}
+          locale={locale}
         />
       </header>
 
       <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(220px,1fr))]">
-        {groups.map((g) => (
+        {visible.map((g) => (
           <Link
             key={g.domain_group}
             href={`/links/${encodeURIComponent(g.domain_group)}${includeArchived ? "?archived=1" : ""}`}
@@ -77,7 +94,7 @@ export default async function LinksIndex({
                   {g.n.toLocaleString()}
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                  last:{" "}
+                  {tr("links.lastPrefix")}:{" "}
                   {g.latest_ts
                     ? formatDistanceToNow(new Date(g.latest_ts * 1000), { addSuffix: true })
                     : "—"}
@@ -92,6 +109,27 @@ export default async function LinksIndex({
           </Link>
         ))}
       </div>
+
+      {hiddenCount > 0 && (
+        <div className="flex justify-center pt-2">
+          <Link
+            href={`/links?show=all${includeArchived ? "&archived=1" : ""}`}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          >
+            {tf("links.showAll", locale, { n: hiddenCount.toLocaleString() })}
+          </Link>
+        </div>
+      )}
+      {showAll && groups.length > TOP_N && (
+        <div className="flex justify-center pt-2">
+          <Link
+            href={`/links${includeArchived ? "?archived=1" : ""}`}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          >
+            {tr("links.collapse")}
+          </Link>
+        </div>
+      )}
     </div>
   );
 }

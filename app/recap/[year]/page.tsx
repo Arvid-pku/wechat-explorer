@@ -9,7 +9,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Download, Sparkles, Calendar, ExternalLink } from "lucide-react";
+import { ArrowLeft, Download, Sparkles, Calendar } from "lucide-react";
 import { getYearRecap, getRecapYears, getYearBaseline } from "@/lib/recap";
 import { ArchivedFilterPill, buildArchivedFilterHref } from "@/components/archived-filter-pill";
 import { formatLatency } from "@/lib/latency";
@@ -18,6 +18,8 @@ import { HourlyGrid } from "@/components/charts/recap/hourly-grid";
 import { LatencyHist, LatencyTrend } from "@/components/charts/recap/latency-hist";
 import { KeywordCloud } from "@/components/charts/recap/keyword-cloud";
 import { HorizontalBars } from "@/components/charts/recap/horizontal-bars";
+import { t, tf, type TKey } from "@/lib/i18n";
+import { getServerLocale } from "@/lib/i18n-server";
 
 export const dynamic = "force-dynamic";
 
@@ -56,6 +58,8 @@ export default async function RecapPage({
 }) {
   const { year: yStr } = await params;
   const sp = await searchParams;
+  const locale = await getServerLocale();
+  const tr = (k: TKey) => t(k, locale);
   const year = parseInt(yStr, 10);
   if (!Number.isFinite(year) || year < 2000 || year > 2100) return notFound();
   const includeArchived = sp.archived === "1";
@@ -71,15 +75,15 @@ export default async function RecapPage({
           href="/"
           className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
         >
-          <ArrowLeft className="size-3.5 mr-1" /> Overview
+          <ArrowLeft className="size-3.5 mr-1" /> {tr("common.backToOverview")}
         </Link>
         <div className="flex items-end justify-between gap-4 flex-wrap">
           <div>
-            <p className="text-xs uppercase tracking-widest text-muted-foreground">Year in Review</p>
+            <p className="text-xs uppercase tracking-widest text-muted-foreground">{tr("recap.eyebrow")}</p>
             <h1 className="text-5xl font-semibold tracking-tight mt-1">{year}</h1>
             {!recap.ok && (
               <p className="text-sm text-muted-foreground mt-2">
-                No indexed messages in {year}. Try one of the years below.
+                {tf("recap.noMessages", locale, { year })}
               </p>
             )}
           </div>
@@ -98,6 +102,7 @@ export default async function RecapPage({
             <ArchivedFilterPill
               on={includeArchived}
               href={buildArchivedFilterHref(`/recap/${year}`, sp, includeArchived)}
+              locale={locale}
             />
 
             <a
@@ -105,7 +110,7 @@ export default async function RecapPage({
               className="inline-flex items-center gap-1 rounded-md border border-border/60 px-3 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent"
             >
               <Download className="size-3.5" />
-              HTML
+              {tr("recap.html")}
             </a>
           </div>
         </div>
@@ -115,15 +120,22 @@ export default async function RecapPage({
         <>
           {/* Hero stats strip */}
           <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Hero label="Messages" value={fmtNum(recap.totals.messages)} sub={`${fmtNum(recap.totals.mine)} you · ${fmtNum(recap.totals.theirs)} them`} />
             <Hero
-              label="Top contact"
+              label={tr("recap.hero.messages")}
+              value={fmtNum(recap.totals.messages)}
+              sub={tf("recap.hero.messagesSub", locale, {
+                mine: fmtNum(recap.totals.mine),
+                theirs: fmtNum(recap.totals.theirs),
+              })}
+            />
+            <Hero
+              label={tr("recap.hero.topContact")}
               value={recap.topContacts[0]?.display_name ?? "—"}
-              sub={recap.topContacts[0] ? `${fmtNum(recap.topContacts[0].n)} msgs` : ""}
+              sub={recap.topContacts[0] ? `${fmtNum(recap.topContacts[0].n)} ${tr("recap.hero.msgs")}` : ""}
               href={recap.topContacts[0] ? `/contacts/${encodeURIComponent(recap.topContacts[0].username)}` : undefined}
             />
             <Hero
-              label="Busiest month"
+              label={tr("recap.hero.busiestMonth")}
               value={
                 recap.monthly.reduce(
                   (a, b) => (b.total > a.total ? b : a),
@@ -135,12 +147,12 @@ export default async function RecapPage({
                   (a, b) => (b.total > a.total ? b : a),
                   { ym: "—", total: 0, mine: 0, theirs: 0 },
                 ).total,
-              )} msgs`}
+              )} ${tr("recap.hero.msgs")}`}
             />
             <Hero
-              label="Longest dry streak"
+              label={tr("recap.hero.longestDry")}
               value={`${recap.totals.longestDryStreak}d`}
-              sub={`Longest active streak ${recap.totals.longestStreak}d`}
+              sub={tf("recap.hero.longestDrySub", locale, { n: recap.totals.longestStreak })}
             />
           </section>
 
@@ -148,24 +160,28 @@ export default async function RecapPage({
           {prevBaseline && prevBaseline.totalMessages > 0 && (
             <section className="rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
               <p className="text-xs uppercase tracking-widest text-muted-foreground mb-2">
-                vs {prevBaseline.year}
+                {tf("recap.vsLast", locale, { year: prevBaseline.year })}
                 {prevBaseline.totalMessages < 30_000 && (
                   <span className="ml-2 text-amber-700 dark:text-amber-400 normal-case tracking-normal">
-                    {prevBaseline.year} only has {fmtNum(prevBaseline.totalMessages)} indexed messages — deltas
-                    likely reflect coverage, not behavior.
+                    {tf("recap.vsLastNotice", locale, {
+                      year: prevBaseline.year,
+                      n: fmtNum(prevBaseline.totalMessages),
+                    })}
                   </span>
                 )}
               </p>
               <div className="grid gap-x-6 gap-y-2 grid-cols-2 sm:grid-cols-4 text-sm">
-                <Delta label="messages" current={recap.totals.messages} previous={prevBaseline.totalMessages} />
-                <Delta label="links" current={recap.totals.links} previous={prevBaseline.totalLinks} />
-                <Delta label="chats" current={recap.totals.chats} previous={prevBaseline.totalChats} />
-                <Delta label="active days" current={recap.totals.days} previous={prevBaseline.totalDays} />
+                <Delta label={tr("recap.delta.messages")} current={recap.totals.messages} previous={prevBaseline.totalMessages} />
+                <Delta label={tr("recap.delta.links")} current={recap.totals.links} previous={prevBaseline.totalLinks} />
+                <Delta label={tr("recap.delta.chats")} current={recap.totals.chats} previous={prevBaseline.totalChats} />
+                <Delta label={tr("recap.delta.days")} current={recap.totals.days} previous={prevBaseline.totalDays} />
               </div>
               {prevBaseline.topContact && recap.topContacts[0] && prevBaseline.topContact !== recap.topContacts[0].display_name && (
                 <p className="text-xs text-muted-foreground mt-2">
-                  Top contact shifted from <span className="font-medium text-foreground">{prevBaseline.topContact}</span>
-                  {" "}→ <span className="font-medium text-foreground">{recap.topContacts[0].display_name}</span>.
+                  {tf("recap.topContactShifted", locale, {
+                    from: prevBaseline.topContact,
+                    to: recap.topContacts[0].display_name,
+                  })}
                 </p>
               )}
             </section>
@@ -173,8 +189,8 @@ export default async function RecapPage({
 
           {/* Monthly */}
           <Section
-            title={`A year of conversations`}
-            description="Stacked bars: your messages on top, theirs underneath. The thin line is the year's cumulative total."
+            title={tr("recap.yearOfConvos")}
+            description={tr("recap.yearOfConvosDesc")}
           >
             <div className="overflow-x-auto">
               <MonthlyBars data={recap.monthly} />
@@ -183,8 +199,8 @@ export default async function RecapPage({
 
           {/* Hourly grid */}
           <Section
-            title="When you were online"
-            description="Cells are darker when more messages landed in that hour. Look for sleep windows and peak times."
+            title={tr("recap.whenOnline")}
+            description={tr("recap.whenOnlineDesc")}
           >
             <HourlyGrid data={recap.hourly} />
           </Section>
@@ -193,19 +209,19 @@ export default async function RecapPage({
           <section className="grid gap-6 lg:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle>Top 10 private chats</CardTitle>
-                <CardDescription>The people you exchanged the most with this year.</CardDescription>
+                <CardTitle>{tr("recap.topPrivateTitle")}</CardTitle>
+                <CardDescription>{tr("recap.topPrivateDesc")}</CardDescription>
               </CardHeader>
               <CardContent>
                 {recap.topContacts.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No private chats indexed.</p>
+                  <p className="text-sm text-muted-foreground">{tr("recap.topPrivateEmpty")}</p>
                 ) : (
                   <HorizontalBars
                     rows={recap.topContacts.map((c) => ({
                       label: c.display_name || c.username,
                       n: c.n,
                       href: `/recap/${year}/${encodeURIComponent(c.username)}`,
-                      sub: `${fmtNum(c.my_msgs)} mine · ${fmtNum(c.links)} links`,
+                      sub: `${fmtNum(c.my_msgs)} ${tr("recap.mine")} · ${fmtNum(c.links)} ${tr("recap.linksSuffix")}`,
                     }))}
                   />
                 )}
@@ -213,12 +229,12 @@ export default async function RecapPage({
             </Card>
             <Card>
               <CardHeader>
-                <CardTitle>Top 10 groups</CardTitle>
-                <CardDescription>The group chats you spent the most time in.</CardDescription>
+                <CardTitle>{tr("recap.topGroupsTitle")}</CardTitle>
+                <CardDescription>{tr("recap.topGroupsDesc")}</CardDescription>
               </CardHeader>
               <CardContent>
                 {recap.topGroups.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No groups indexed.</p>
+                  <p className="text-sm text-muted-foreground">{tr("recap.topGroupsEmpty")}</p>
                 ) : (
                   <HorizontalBars
                     rows={recap.topGroups.map((g) => ({
@@ -226,8 +242,8 @@ export default async function RecapPage({
                       n: g.n,
                       href: `/contacts/${encodeURIComponent(g.username)}`,
                       sub: g.member_count
-                        ? `${g.member_count} members · ${fmtNum(g.my_msgs)} yours`
-                        : `${fmtNum(g.my_msgs)} yours`,
+                        ? `${g.member_count} ${tr("recap.membersSuffix")} · ${fmtNum(g.my_msgs)} ${tr("recap.yours")}`
+                        : `${fmtNum(g.my_msgs)} ${tr("recap.yours")}`,
                     }))}
                     tone="muted"
                   />
@@ -240,8 +256,8 @@ export default async function RecapPage({
           <section className="grid gap-6 lg:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle>Top 25 link sources</CardTitle>
-                <CardDescription>What you shared and read most this year.</CardDescription>
+                <CardTitle>{tr("recap.topLinkSourcesTitle")}</CardTitle>
+                <CardDescription>{tr("recap.topLinkSourcesDesc")}</CardDescription>
               </CardHeader>
               <CardContent>
                 <HorizontalBars
@@ -256,8 +272,8 @@ export default async function RecapPage({
             </Card>
             <Card>
               <CardHeader>
-                <CardTitle>Records</CardTitle>
-                <CardDescription>Quirky highlights of the year.</CardDescription>
+                <CardTitle>{tr("recap.recordsTitle")}</CardTitle>
+                <CardDescription>{tr("recap.recordsDesc")}</CardDescription>
               </CardHeader>
               <CardContent>
                 <ul className="space-y-3">
@@ -286,8 +302,8 @@ export default async function RecapPage({
 
           {/* Word cloud */}
           <Section
-            title="What you talked about"
-            description="Top 50 distinctive words, sized by how much more they appeared in your year vs the rest of the corpus."
+            title={tr("recap.whatYouTalked")}
+            description={tr("recap.whatYouTalkedDesc")}
           >
             <KeywordCloud words={recap.keywords} limit={50} />
           </Section>
@@ -296,25 +312,30 @@ export default async function RecapPage({
           <section className="grid gap-6 lg:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle>Reply latency</CardTitle>
+                <CardTitle>{tr("recap.replyLatency")}</CardTitle>
                 <CardDescription>
-                  How fast replies came in. Median them → you {recap.latencyMedians.themToYouSec > 0
-                    ? formatLatency(recap.latencyMedians.themToYouSec)
-                    : "—"}, you → them {recap.latencyMedians.youToThemSec > 0
-                    ? formatLatency(recap.latencyMedians.youToThemSec)
-                    : "—"}.
+                  {tf("recap.replyLatencyDesc", locale, {
+                    them:
+                      recap.latencyMedians.themToYouSec > 0
+                        ? formatLatency(recap.latencyMedians.themToYouSec)
+                        : "—",
+                    you:
+                      recap.latencyMedians.youToThemSec > 0
+                        ? formatLatency(recap.latencyMedians.youToThemSec)
+                        : "—",
+                  })}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <LatencyHist
                   data={recap.latencyHistThemToYou}
-                  title="them → you"
+                  title={tr("recap.themToYou")}
                   tone="primary"
                   median={recap.latencyMedians.themToYouSec > 0 ? formatLatency(recap.latencyMedians.themToYouSec) : undefined}
                 />
                 <LatencyHist
                   data={recap.latencyHistYouToThem}
-                  title="you → them"
+                  title={tr("recap.youToThem")}
                   tone="muted"
                   median={recap.latencyMedians.youToThemSec > 0 ? formatLatency(recap.latencyMedians.youToThemSec) : undefined}
                 />
@@ -322,14 +343,14 @@ export default async function RecapPage({
             </Card>
             <Card>
               <CardHeader>
-                <CardTitle>Latency over time</CardTitle>
-                <CardDescription>Median monthly reply time, log-scaled.</CardDescription>
+                <CardTitle>{tr("recap.latencyOverTimeTitle")}</CardTitle>
+                <CardDescription>{tr("recap.latencyOverTimeDesc")}</CardDescription>
               </CardHeader>
               <CardContent>
                 {recap.latencyTrend.length >= 2 ? (
                   <LatencyTrend data={recap.latencyTrend} />
                 ) : (
-                  <p className="text-sm text-muted-foreground">Not enough data for a monthly trend.</p>
+                  <p className="text-sm text-muted-foreground">{tr("recap.latencyTrendEmpty")}</p>
                 )}
               </CardContent>
             </Card>
@@ -339,12 +360,14 @@ export default async function RecapPage({
           <section className="grid gap-6 lg:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle>New people in {year}</CardTitle>
-                <CardDescription>Sessions where the first message ever was this year.</CardDescription>
+                <CardTitle>{tf("recap.newPeopleTitle", locale, { year })}</CardTitle>
+                <CardDescription>{tr("recap.newPeopleDesc")}</CardDescription>
               </CardHeader>
               <CardContent>
                 {recap.newContacts.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No new contacts in {year}.</p>
+                  <p className="text-sm text-muted-foreground">
+                    {tf("recap.newPeopleEmpty", locale, { year })}
+                  </p>
                 ) : (
                   <ul className="space-y-2 text-sm">
                     {recap.newContacts.slice(0, 16).map((c) => (
@@ -371,12 +394,12 @@ export default async function RecapPage({
             </Card>
             <Card>
               <CardHeader>
-                <CardTitle>First & last message</CardTitle>
-                <CardDescription>How the year opened and closed.</CardDescription>
+                <CardTitle>{tr("recap.bookendsTitle")}</CardTitle>
+                <CardDescription>{tr("recap.bookendsDesc")}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <Bookend label="First" m={recap.firstMessage} />
-                <Bookend label="Last" m={recap.lastMessage} />
+                <Bookend label={tr("recap.first")} m={recap.firstMessage} locale={locale} />
+                <Bookend label={tr("recap.last")} m={recap.lastMessage} locale={locale} />
               </CardContent>
             </Card>
           </section>
@@ -386,18 +409,18 @@ export default async function RecapPage({
             <section className="grid gap-6 lg:grid-cols-2">
               <Card>
                 <CardHeader>
-                  <CardTitle>Your top emoji</CardTitle>
+                  <CardTitle>{tr("recap.topEmojiYours")}</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <EmojiRow items={recap.topEmojiMine} />
+                  <EmojiRow items={recap.topEmojiMine} emptyText={tr("recap.noEmoji")} />
                 </CardContent>
               </Card>
               <Card>
                 <CardHeader>
-                  <CardTitle>Their top emoji</CardTitle>
+                  <CardTitle>{tr("recap.topEmojiTheirs")}</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <EmojiRow items={recap.topEmojiTheirs} />
+                  <EmojiRow items={recap.topEmojiTheirs} emptyText={tr("recap.noEmoji")} />
                 </CardContent>
               </Card>
             </section>
@@ -407,15 +430,16 @@ export default async function RecapPage({
             <Card className="border-primary/40">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Calendar className="size-4 text-primary" /> Busiest day: {recap.busiestDay.day}
+                  <Calendar className="size-4 text-primary" />{" "}
+                  {tf("recap.busiestDayCard", locale, { day: recap.busiestDay.day })}
                 </CardTitle>
                 <CardDescription>
-                  {fmtNum(recap.busiestDay.n)} messages on a single day.{" "}
+                  {tf("recap.busiestDayMsgs", locale, { n: fmtNum(recap.busiestDay.n) })}{" "}
                   <Link
                     href={`/calendar?year=${year}&day=${recap.busiestDay.day}`}
                     className="underline hover:text-primary"
                   >
-                    See the day in the calendar →
+                    {tr("recap.seeDayInCalendar")}
                   </Link>
                 </CardDescription>
               </CardHeader>
@@ -423,7 +447,9 @@ export default async function RecapPage({
           )}
 
           <p className="text-xs text-muted-foreground text-center pt-4">
-            Computed {format(new Date(recap.computedAt), "PPpp")} · all stats are local to your machine
+            {tf("recap.computedFooter", locale, {
+              when: format(new Date(recap.computedAt), "PPpp"),
+            })}
           </p>
         </>
       )}
@@ -513,6 +539,7 @@ function Hero({
 function Bookend({
   label,
   m,
+  locale,
 }: {
   label: string;
   m: {
@@ -522,8 +549,10 @@ function Bookend({
     content: string;
     timestamp: number;
   } | null;
+  locale: "en" | "zh";
 }) {
   if (!m) return null;
+  const tr = (k: TKey) => t(k, locale);
   return (
     <div className="border-l-2 border-primary/40 pl-3 space-y-1">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -543,13 +572,13 @@ function Bookend({
         <span>·</span>
         <span className="tabular-nums">{format(new Date(m.timestamp * 1000), "MMM d, HH:mm")}</span>
       </div>
-      <p className="text-sm whitespace-pre-wrap break-words">{m.content || "(no text)"}</p>
+      <p className="text-sm whitespace-pre-wrap break-words">{m.content || tr("recap.noText")}</p>
     </div>
   );
 }
 
-function EmojiRow({ items }: { items: { emoji: string; n: number }[] }) {
-  if (items.length === 0) return <p className="text-sm text-muted-foreground">No emoji.</p>;
+function EmojiRow({ items, emptyText }: { items: { emoji: string; n: number }[]; emptyText: string }) {
+  if (items.length === 0) return <p className="text-sm text-muted-foreground">{emptyText}</p>;
   const max = Math.max(...items.map((x) => x.n));
   return (
     <div className="flex items-center gap-3 flex-wrap">

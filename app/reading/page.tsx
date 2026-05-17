@@ -25,8 +25,10 @@ function filterOptions(locale: "en" | "zh"): { key: FilterKey; label: string }[]
 }
 
 function parseFilter(v: string | undefined): FilterKey {
-  if (v === "unread" || v === "read") return v;
-  return "all";
+  if (v === "unread" || v === "read" || v === "all") return v;
+  // No param = "queue mode" — surface unread items by default. The user can
+  // still flip to "All" to see history including already-read items.
+  return "unread";
 }
 
 function buildHref(

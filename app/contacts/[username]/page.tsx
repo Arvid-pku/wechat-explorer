@@ -23,12 +23,15 @@ import {
   Users,
 } from "lucide-react";
 import { ArchiveSessionButton } from "@/components/archive-session-button";
+import { HeroCard } from "@/components/hero-card";
 import { MonthlyActivityChart } from "@/components/charts/monthly-activity-chart";
 import { HourlyGrid } from "@/components/charts/hourly-grid";
 import { LatencyHistogram } from "@/components/charts/latency-histogram";
 import { WordCloud } from "@/components/charts/word-cloud";
 import { bucketLatencies, latencyStats, formatLatency } from "@/lib/latency";
 import type { StyleFingerprint } from "@/lib/queries.contact";
+import { t, tf, type Locale, type TKey } from "@/lib/i18n";
+import { getServerLocale } from "@/lib/i18n-server";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +49,8 @@ export default async function ContactDetailPage({
 }) {
   const { username } = await params;
   const decoded = decodeURIComponent(username);
+  const locale = await getServerLocale();
+  const tr = (k: TKey) => t(k, locale);
   // Cheap up-front read just to validate the URL + paint the header. The
   // expensive analytics call happens inside <Suspense> below, so the back
   // link + page title + archive button can render immediately while the
@@ -77,7 +82,7 @@ export default async function ContactDetailPage({
         href="/contacts"
         className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
       >
-        <ArrowLeft className="size-3.5 mr-1" /> Back to contacts
+        <ArrowLeft className="size-3.5 mr-1" /> {tr("common.backToContacts")}
       </Link>
 
       <header className="flex items-start justify-between gap-4 flex-wrap">
@@ -86,7 +91,7 @@ export default async function ContactDetailPage({
             {chatDisplay}
             {sessionRow.archived === 1 && (
               <Badge variant="outline" className="text-amber-600 border-amber-500/50">
-                Archived
+                {tr("contact.archivedBadge")}
               </Badge>
             )}
           </h1>
@@ -94,7 +99,9 @@ export default async function ContactDetailPage({
             <Badge variant="secondary">{sessionRow.chat_type}</Badge>
             <span className="font-mono text-xs">{sessionRow.username}</span>
             {sessionRow.member_count != null && (
-              <span className="text-xs">· {fmt(sessionRow.member_count)} members</span>
+              <span className="text-xs">
+                · {fmt(sessionRow.member_count)} {tr("contact.members")}
+              </span>
             )}
           </p>
         </div>
@@ -104,7 +111,7 @@ export default async function ContactDetailPage({
               href={`/recap/${lastYear}/${encodeURIComponent(sessionRow.username)}`}
               className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-1.5 text-sm hover:bg-accent"
             >
-              <Sparkles className="size-3.5" /> Recap {lastYear}
+              <Sparkles className="size-3.5" /> {tr("contact.recap")} {lastYear}
             </Link>
           )}
           {lastDay && lastYear && (
@@ -112,7 +119,7 @@ export default async function ContactDetailPage({
               href={`/calendar?year=${lastYear}&day=${lastDay}&chat=${encodeURIComponent(sessionRow.username)}`}
               className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-1.5 text-sm hover:bg-accent"
             >
-              <CalendarDays className="size-3.5" /> View in calendar
+              <CalendarDays className="size-3.5" /> {tr("contact.viewInCalendar")}
             </Link>
           )}
           <ArchiveSessionButton
@@ -123,13 +130,13 @@ export default async function ContactDetailPage({
       </header>
 
       <Suspense fallback={<ContactBodySkeleton />}>
-        <ContactBody decoded={decoded} />
+        <ContactBody decoded={decoded} locale={locale} />
       </Suspense>
     </div>
   );
 }
 
-async function ContactBody({ decoded }: { decoded: string }) {
+async function ContactBody({ decoded, locale }: { decoded: string; locale: Locale }) {
   // Yield to the event loop once so React flushes the parent + the Suspense
   // fallback before this sync better-sqlite3 call kicks off. Without this
   // tiny await, the synchronous compute runs in the same render tick as the
@@ -137,6 +144,7 @@ async function ContactBody({ decoded }: { decoded: string }) {
   await new Promise((r) => setImmediate(r));
   const a = getContactAnalytics(decoded);
   if (!a) return notFound();
+  const tr = (k: TKey) => t(k, locale);
   const { session, totals, monthly, hourly, latencies, styleMine, styleTheirs, msgTypeBreakdown } = a;
   const themBuckets = bucketLatencies(latencies.themToYou);
   const youBuckets = bucketLatencies(latencies.youToThem);
@@ -151,14 +159,14 @@ async function ContactBody({ decoded }: { decoded: string }) {
           <Sparkles className="size-4 shrink-0 text-amber-600 mt-0.5" />
           <div className="space-y-1">
             <p className="font-medium text-amber-900 dark:text-amber-200">
-              Reply latency and your-share are unavailable for this chat
+              {tr("contact.noMeHere")}
             </p>
             <p className="text-xs text-muted-foreground">
-              The indexer couldn&apos;t identify your sender handle here.{" "}
+              {tr("contact.noMeHereSub")}{" "}
               <Link href="/settings" className="underline hover:text-foreground">
-                Open Settings
+                {tr("contact.openSettings")}
               </Link>{" "}
-              to set your me-handles and re-run a quick index.
+              {tr("contact.openSettingsSuffix")}
             </p>
           </div>
         </div>
@@ -166,27 +174,49 @@ async function ContactBody({ decoded }: { decoded: string }) {
 
       {/* Hero stat strip */}
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <HeroStat
+        <HeroCard
+          size="sm"
           icon={<MessageSquare className="size-3.5" />}
-          title="Messages"
+          label={tr("contact.hero.messages")}
           value={fmt(totals.messages)}
-          sub={totals.theirs > 0 || totals.mine > 0 ? `${fmt(totals.mine)} you · ${fmt(totals.theirs)} them` : undefined}
+          sub={
+            totals.theirs > 0 || totals.mine > 0
+              ? tf("contact.hero.messagesSub", locale, {
+                  mine: fmt(totals.mine),
+                  theirs: fmt(totals.theirs),
+                })
+              : undefined
+          }
         />
-        <HeroStat
+        <HeroCard
+          size="sm"
           icon={<PieChart className="size-3.5" />}
-          title="Your share"
+          label={tr("contact.hero.yourShare")}
           value={totals.messages > 0 ? pct(totals.minePct) : "—"}
-          sub={a.meHandles.length === 0 ? "no me-handle here" : `${fmt(totals.mine)} of ${fmt(totals.messages)}`}
+          sub={
+            a.meHandles.length === 0
+              ? tr("contact.hero.yourShareNoMe")
+              : tf("contact.hero.yourShareOf", locale, {
+                  mine: fmt(totals.mine),
+                  total: fmt(totals.messages),
+                })
+          }
         />
-        <HeroStat
+        <HeroCard
+          size="sm"
           icon={<LinkIcon className="size-3.5" />}
-          title="Links shared"
+          label={tr("contact.hero.links")}
           value={fmt(totals.links)}
-          sub={a.topDomains[0] ? `top: ${a.topDomains[0].domain_group}` : undefined}
+          sub={
+            a.topDomains[0]
+              ? `${tr("contact.hero.linksTop")}: ${a.topDomains[0].domain_group}`
+              : undefined
+          }
         />
-        <HeroStat
+        <HeroCard
+          size="sm"
           icon={<Clock className="size-3.5" />}
-          title="Last active"
+          label={tr("contact.hero.lastActive")}
           value={
             totals.lastTs
               ? formatDistanceToNow(new Date(totals.lastTs * 1000), { addSuffix: true })
@@ -194,13 +224,14 @@ async function ContactBody({ decoded }: { decoded: string }) {
           }
           sub={totals.lastTs ? format(new Date(totals.lastTs * 1000), "MMM d, yyyy") : undefined}
         />
-        <HeroStat
+        <HeroCard
+          size="sm"
           icon={<Calendar className="size-3.5" />}
-          title="First contacted"
+          label={tr("contact.hero.firstContacted")}
           value={totals.firstTs ? format(new Date(totals.firstTs * 1000), "MMM d, yyyy") : "—"}
           sub={
             totals.firstTs && totals.lastTs
-              ? `${Math.round((totals.lastTs - totals.firstTs) / 86400)} days span`
+              ? `${Math.round((totals.lastTs - totals.firstTs) / 86400)} ${tr("contact.hero.daysSpan")}`
               : undefined
           }
         />
@@ -209,18 +240,14 @@ async function ContactBody({ decoded }: { decoded: string }) {
       {/* Monthly activity */}
       <Card>
         <CardHeader>
-          <CardTitle>Monthly activity (last 24 months)</CardTitle>
-          <CardDescription>
-            Stacked counts: your sends + their sends per month
-          </CardDescription>
+          <CardTitle>{tr("contact.monthlyTitle")}</CardTitle>
+          <CardDescription>{tr("contact.monthlyDesc")}</CardDescription>
         </CardHeader>
         <CardContent>
           {monthly.some((m) => m.mine + m.theirs > 0) ? (
             <MonthlyActivityChart data={monthly} />
           ) : (
-            <p className="text-sm text-muted-foreground">
-              No messages indexed in the last 24 months — run a deep index from Settings.
-            </p>
+            <p className="text-sm text-muted-foreground">{tr("contact.monthlyEmpty")}</p>
           )}
         </CardContent>
       </Card>
@@ -229,8 +256,8 @@ async function ContactBody({ decoded }: { decoded: string }) {
       <section className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Activity by hour</CardTitle>
-            <CardDescription>When does this chat happen? (local time)</CardDescription>
+            <CardTitle>{tr("contact.hourlyTitle")}</CardTitle>
+            <CardDescription>{tr("contact.hourlyDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <HourlyGrid data={hourly} />
@@ -239,13 +266,16 @@ async function ContactBody({ decoded }: { decoded: string }) {
 
         <Card>
           <CardHeader>
-            <CardTitle>Reply latency</CardTitle>
+            <CardTitle>{tr("contact.latencyTitle")}</CardTitle>
             <CardDescription>
               {hasLatency
-                ? `Median them→you ${formatLatency(themStats.median)} · you→them ${formatLatency(youStats.median)}`
+                ? tf("contact.latencyMedians", locale, {
+                    them: formatLatency(themStats.median),
+                    you: formatLatency(youStats.median),
+                  })
                 : a.meHandles.length === 0
-                ? "Configure your me-handles in Settings to see reply latency."
-                : "Not enough back-and-forth in this chat yet."}
+                  ? tr("contact.latencyNoMe")
+                  : tr("contact.latencyNotEnough")}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -253,8 +283,10 @@ async function ContactBody({ decoded }: { decoded: string }) {
               <>
                 <div className="space-y-1">
                   <div className="flex items-center justify-between text-xs text-muted-foreground">
-                    <span>Them → You</span>
-                    <span className="tabular-nums">{fmt(themStats.count)} replies</span>
+                    <span>{tr("contact.themToYou")}</span>
+                    <span className="tabular-nums">
+                      {fmt(themStats.count)} {tr("contact.replies")}
+                    </span>
                   </div>
                   <LatencyHistogram
                     data={themBuckets.map((b) => ({ label: b.label, n: b.n }))}
@@ -263,8 +295,10 @@ async function ContactBody({ decoded }: { decoded: string }) {
                 </div>
                 <div className="space-y-1">
                   <div className="flex items-center justify-between text-xs text-muted-foreground">
-                    <span>You → Them</span>
-                    <span className="tabular-nums">{fmt(youStats.count)} replies</span>
+                    <span>{tr("contact.youToThem")}</span>
+                    <span className="tabular-nums">
+                      {fmt(youStats.count)} {tr("contact.replies")}
+                    </span>
                   </div>
                   <LatencyHistogram
                     data={youBuckets.map((b) => ({ label: b.label, n: b.n }))}
@@ -280,19 +314,21 @@ async function ContactBody({ decoded }: { decoded: string }) {
       {/* Style fingerprint */}
       {!a.isGroup && (
         <section className="grid gap-6 lg:grid-cols-2">
-          <StyleCard label="Your style" tone="primary" style={styleMine} />
-          <StyleCard label="Their style" tone="muted" style={styleTheirs} />
+          <StyleCard label={tr("contact.styleYour")} tone="primary" style={styleMine} locale={locale} />
+          <StyleCard label={tr("contact.styleTheir")} tone="muted" style={styleTheirs} locale={locale} />
         </section>
       )}
 
       {a.isGroup && (
         <Card>
           <CardHeader>
-            <CardTitle>Group style fingerprint</CardTitle>
-            <CardDescription>Sampled across the most recent {fmt(styleTheirs.sampleSize)} messages</CardDescription>
+            <CardTitle>{tr("contact.styleGroupTitle")}</CardTitle>
+            <CardDescription>
+              {tf("contact.styleSampled", locale, { n: fmt(styleTheirs.sampleSize) })}
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <StyleCard inline label="Group" tone="muted" style={styleTheirs} />
+            <StyleCard inline label={tr("contact.styleGroup")} tone="muted" style={styleTheirs} locale={locale} />
           </CardContent>
         </Card>
       )}
@@ -301,9 +337,9 @@ async function ContactBody({ decoded }: { decoded: string }) {
       <section className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Topic fingerprint</CardTitle>
+            <CardTitle>{tr("contact.topicTitle")}</CardTitle>
             <CardDescription>
-              Top {a.topics.length} TF-IDF words for this chat vs a global baseline. Click a word to search.
+              {tf("contact.topicDesc", locale, { n: a.topics.length })}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -313,14 +349,16 @@ async function ContactBody({ decoded }: { decoded: string }) {
 
         <Card>
           <CardHeader>
-            <CardTitle>Shared content</CardTitle>
-            <CardDescription>Where do the links go?</CardDescription>
+            <CardTitle>{tr("contact.sharedTitle")}</CardTitle>
+            <CardDescription>{tr("contact.sharedDesc")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <DomainShareList rows={a.topDomains} chatUsername={session.username} />
+            <DomainShareList rows={a.topDomains} chatUsername={session.username} locale={locale} />
             {a.fileTypes.length > 0 && (
               <div>
-                <p className="text-xs font-medium text-muted-foreground mb-1.5">File types</p>
+                <p className="text-xs font-medium text-muted-foreground mb-1.5">
+                  {tr("contact.fileTypes")}
+                </p>
                 <div className="flex flex-wrap gap-1.5">
                   {a.fileTypes.map((ft) => (
                     <Badge key={ft.ext} variant="secondary" className="font-normal">
@@ -332,7 +370,7 @@ async function ContactBody({ decoded }: { decoded: string }) {
               </div>
             )}
             {a.topDomains.length === 0 && a.fileTypes.length === 0 && (
-              <p className="text-sm text-muted-foreground">No shared content indexed yet.</p>
+              <p className="text-sm text-muted-foreground">{tr("contact.sharedEmpty")}</p>
             )}
           </CardContent>
         </Card>
@@ -343,20 +381,20 @@ async function ContactBody({ decoded }: { decoded: string }) {
         <section className="grid gap-6 lg:grid-cols-2">
           <Card>
             <CardHeader>
-              <CardTitle>Words you use, they don&apos;t</CardTitle>
-              <CardDescription>Tokens distinctive to your side</CardDescription>
+              <CardTitle>{tr("contact.vocabYours")}</CardTitle>
+              <CardDescription>{tr("contact.vocabYoursDesc")}</CardDescription>
             </CardHeader>
             <CardContent>
-              <VocabList words={a.vocab.aOnly} chatUsername={session.username} />
+              <VocabList words={a.vocab.aOnly} chatUsername={session.username} locale={locale} />
             </CardContent>
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle>Words they use, you don&apos;t</CardTitle>
-              <CardDescription>Tokens distinctive to their side</CardDescription>
+              <CardTitle>{tr("contact.vocabTheirs")}</CardTitle>
+              <CardDescription>{tr("contact.vocabTheirsDesc")}</CardDescription>
             </CardHeader>
             <CardContent>
-              <VocabList words={a.vocab.bOnly} chatUsername={session.username} />
+              <VocabList words={a.vocab.bOnly} chatUsername={session.username} locale={locale} />
             </CardContent>
           </Card>
         </section>
@@ -366,12 +404,12 @@ async function ContactBody({ decoded }: { decoded: string }) {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Users className="size-3.5" /> Top senders
+              <Users className="size-3.5" /> {tr("contact.topSendersTitle")}
             </CardTitle>
-            <CardDescription>The voices that drive this group</CardDescription>
+            <CardDescription>{tr("contact.topSendersDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
-            <TopSendersList senders={a.topSenders} chatUsername={session.username} />
+            <TopSendersList senders={a.topSenders} chatUsername={session.username} locale={locale} />
           </CardContent>
         </Card>
       )}
@@ -380,12 +418,12 @@ async function ContactBody({ decoded }: { decoded: string }) {
       <section className="grid gap-6 lg:grid-cols-3">
         <Card>
           <CardHeader>
-            <CardTitle>Message types</CardTitle>
-            <CardDescription>What flows here</CardDescription>
+            <CardTitle>{tr("contact.msgTypesTitle")}</CardTitle>
+            <CardDescription>{tr("contact.msgTypesDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             {msgTypeBreakdown.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No data yet.</p>
+              <p className="text-sm text-muted-foreground">{tr("contact.msgTypesEmpty")}</p>
             ) : (
               <ul className="space-y-2">
                 {msgTypeBreakdown.slice(0, 10).map((r) => {
@@ -412,15 +450,12 @@ async function ContactBody({ decoded }: { decoded: string }) {
 
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Recent messages</CardTitle>
-            <CardDescription>Last 50 indexed messages</CardDescription>
+            <CardTitle>{tr("contact.recentTitle")}</CardTitle>
+            <CardDescription>{tr("contact.recentDesc")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {a.recent.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                History for this chat has not been indexed yet. Trigger a deep index from Settings to
-                pull messages.
-              </p>
+              <p className="text-sm text-muted-foreground">{tr("contact.recentEmpty")}</p>
             ) : (
               a.recent.map((m) => {
                 const d = new Date(m.timestamp * 1000);
@@ -432,13 +467,13 @@ async function ContactBody({ decoded }: { decoded: string }) {
                       <span
                         className={`font-medium ${m.isMine ? "text-primary" : "text-foreground"}`}
                       >
-                        {m.isMine ? "You" : "—"}
+                        {m.isMine ? tr("common.you") : "—"}
                       </span>
                     ) : (
                       <Link
                         href={`/search?q=${encodeURIComponent(m.sender)}&chat=${encodeURIComponent(session.username)}`}
                         className="font-medium text-foreground hover:underline"
-                        title={`Search for ${m.sender} within this chat`}
+                        title={tf("contact.searchInChat", locale, { sender: m.sender })}
                       >
                         {m.sender}
                       </Link>
@@ -446,12 +481,23 @@ async function ContactBody({ decoded }: { decoded: string }) {
                     <Badge variant="outline" className="text-[10px] font-normal">
                       {m.msg_type}
                     </Badge>
+                    {/* Per project convention: timestamp → /messages/<id> (the
+                        permalink with ±20 context lines is the richer drill).
+                        Day glyph → calendar day-detail, kept as a smaller
+                        secondary affordance. */}
                     <Link
-                      href={`/calendar?year=${d.getFullYear()}&day=${dayStr}&chat=${encodeURIComponent(session.username)}`}
+                      href={`/messages/${m.id}`}
                       className="tabular-nums hover:text-foreground hover:underline"
-                      title="Open this day in the calendar (filtered to this chat)"
+                      title={tr("messages.permalink")}
                     >
                       {format(d, "MMM d, HH:mm")}
+                    </Link>
+                    <Link
+                      href={`/calendar?year=${d.getFullYear()}&day=${dayStr}&chat=${encodeURIComponent(session.username)}`}
+                      className="text-muted-foreground/70 hover:text-foreground hover:underline text-[10px]"
+                      title={tr("contact.openDayInCal")}
+                    >
+                      {tr("messages.day")}
                     </Link>
                   </div>
                   <p className="text-sm whitespace-pre-wrap break-words">{m.content}</p>
@@ -513,54 +559,30 @@ function ContactBodySkeleton() {
 
 /* ---------- subcomponents ---------- */
 
-function HeroStat({
-  icon,
-  title,
-  value,
-  sub,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  value: string;
-  sub?: string;
-}) {
-  return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardDescription className="flex items-center gap-1.5">
-          {icon}
-          {title}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-1">
-        <div className="text-2xl font-semibold tracking-tight tabular-nums">{value}</div>
-        {sub && <p className="text-xs text-muted-foreground tabular-nums">{sub}</p>}
-      </CardContent>
-    </Card>
-  );
-}
-
 function StyleCard({
   label,
   tone,
   style,
   inline,
+  locale,
 }: {
   label: string;
   tone: "primary" | "muted";
   style: StyleFingerprint;
   inline?: boolean;
+  locale: Locale;
 }) {
+  const tr = (k: TKey) => t(k, locale);
   const ringTone = tone === "primary" ? "ring-primary/40" : "ring-foreground/10";
   if (style.sampleSize === 0) {
     if (inline) {
-      return <p className="text-sm text-muted-foreground">No messages on this side yet.</p>;
+      return <p className="text-sm text-muted-foreground">{tr("contact.styleEmpty")}</p>;
     }
     return (
       <Card className={ringTone}>
         <CardHeader>
           <CardTitle>{label}</CardTitle>
-          <CardDescription>No messages on this side yet.</CardDescription>
+          <CardDescription>{tr("contact.styleEmpty")}</CardDescription>
         </CardHeader>
       </Card>
     );
@@ -569,13 +591,13 @@ function StyleCard({
   const stats = (
     <>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
-        <Metric label="Avg chars / text" value={style.avgChars.toFixed(0)} />
-        <Metric label="Emoji / text" value={style.emojiPerMsg.toFixed(2)} />
-        <Metric label="Link rate" value={style.linkPerMsg.toFixed(3)} />
+        <Metric label={tr("contact.metric.avgChars")} value={style.avgChars.toFixed(0)} />
+        <Metric label={tr("contact.metric.emojiPerMsg")} value={style.emojiPerMsg.toFixed(2)} />
+        <Metric label={tr("contact.metric.linkRate")} value={style.linkPerMsg.toFixed(3)} />
         <Metric
           label={
             <span className="inline-flex items-center gap-1">
-              <Mic className="size-3" /> Voice
+              <Mic className="size-3" /> {tr("contact.metric.voice")}
             </span>
           }
           value={`${(style.voiceShare * 100).toFixed(1)}%`}
@@ -583,7 +605,7 @@ function StyleCard({
         <Metric
           label={
             <span className="inline-flex items-center gap-1">
-              <ImageIcon className="size-3" /> Image
+              <ImageIcon className="size-3" /> {tr("contact.metric.image")}
             </span>
           }
           value={`${(style.imageShare * 100).toFixed(1)}%`}
@@ -591,7 +613,7 @@ function StyleCard({
         <Metric
           label={
             <span className="inline-flex items-center gap-1">
-              <Smile className="size-3" /> Sticker
+              <Smile className="size-3" /> {tr("contact.metric.sticker")}
             </span>
           }
           value={`${(style.stickerShare * 100).toFixed(1)}%`}
@@ -599,13 +621,13 @@ function StyleCard({
       </div>
       {style.topEmoji.length > 0 && (
         <div className="mt-3">
-          <p className="text-xs text-muted-foreground mb-1.5">Top emoji</p>
+          <p className="text-xs text-muted-foreground mb-1.5">{tr("contact.topEmoji")}</p>
           <div className="flex flex-wrap gap-1.5">
             {style.topEmoji.map((e) => (
               <span
                 key={e.emoji}
                 className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-base"
-                title={`${e.emoji} — ${e.n} uses`}
+                title={tf("contact.topEmojiTooltip", locale, { emoji: e.emoji, n: e.n })}
               >
                 <span>{e.emoji}</span>
                 <span className="text-[10px] text-muted-foreground tabular-nums">{e.n}</span>
@@ -626,7 +648,7 @@ function StyleCard({
       <CardHeader>
         <CardTitle>{label}</CardTitle>
         <CardDescription>
-          Sampled across the most recent {fmt(style.sampleSize)} messages
+          {tf("contact.styleSampled", locale, { n: fmt(style.sampleSize) })}
         </CardDescription>
       </CardHeader>
       <CardContent>{stats}</CardContent>
@@ -646,12 +668,14 @@ function Metric({ label, value }: { label: React.ReactNode; value: string }) {
 function DomainShareList({
   rows,
   chatUsername,
+  locale,
 }: {
   rows: { domain_group: string; n: number }[];
   chatUsername: string;
+  locale: Locale;
 }) {
   if (rows.length === 0) {
-    return <p className="text-sm text-muted-foreground">No links indexed yet.</p>;
+    return <p className="text-sm text-muted-foreground">{t("contact.linksEmpty", locale)}</p>;
   }
   const max = rows.reduce((a, b) => Math.max(a, b.n), 0) || 1;
   return (
@@ -681,12 +705,14 @@ function DomainShareList({
 function VocabList({
   words,
   chatUsername,
+  locale,
 }: {
   words: import("@/lib/text").ScoredWord[];
   chatUsername?: string;
+  locale: Locale;
 }) {
   if (words.length === 0) {
-    return <p className="text-sm text-muted-foreground">Not enough distinctive vocabulary yet.</p>;
+    return <p className="text-sm text-muted-foreground">{t("contact.vocabEmpty", locale)}</p>;
   }
   return (
     <div className="flex flex-wrap gap-1.5">
@@ -694,12 +720,13 @@ function VocabList({
         const href = chatUsername
           ? `/search?q=${encodeURIComponent(w.word)}&chat=${encodeURIComponent(chatUsername)}`
           : `/search?q=${encodeURIComponent(w.word)}`;
+        const scope = chatUsername ? t("contact.vocabInChat", locale) : "";
         return (
           <Link
             key={w.word}
             href={href}
             className="inline-flex items-center gap-1 rounded-md bg-muted hover:bg-accent px-2 py-1 text-sm transition-colors"
-            title={`${w.count} mentions${chatUsername ? " (in this chat)" : ""}`}
+            title={tf("contact.vocabMentions", locale, { count: w.count, scope })}
           >
             <span className="font-medium">{w.word}</span>
             <span className="text-[10px] text-muted-foreground tabular-nums">{w.count}</span>
@@ -713,10 +740,13 @@ function VocabList({
 function TopSendersList({
   senders,
   chatUsername,
+  locale,
 }: {
   senders: { sender: string; n: number; knownUsername: string | null }[];
   chatUsername?: string;
+  locale: Locale;
 }) {
+  const tr = (k: TKey) => t(k, locale);
   const max = senders.reduce((a, b) => Math.max(a, b.n), 0) || 1;
   return (
     <ul className="space-y-1.5">
@@ -740,7 +770,7 @@ function TopSendersList({
                   {s.sender || "—"}
                   {s.knownUsername && (
                     <Badge variant="outline" className="ml-2 text-[10px] font-normal">
-                      contact
+                      {tr("contact.contactBadge")}
                     </Badge>
                   )}
                 </span>

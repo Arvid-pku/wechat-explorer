@@ -17,6 +17,8 @@ import { HourlyGrid } from "@/components/charts/recap/hourly-grid";
 import { LatencyHist, LatencyTrend } from "@/components/charts/recap/latency-hist";
 import { KeywordCloud } from "@/components/charts/recap/keyword-cloud";
 import { HorizontalBars } from "@/components/charts/recap/horizontal-bars";
+import { t, tf, type TKey } from "@/lib/i18n";
+import { getServerLocale } from "@/lib/i18n-server";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +42,8 @@ export default async function ChatRecapPage({
   params: Promise<{ year: string; chat_username: string }>;
 }) {
   const { year: yStr, chat_username } = await params;
+  const locale = await getServerLocale();
+  const tr = (k: TKey) => t(k, locale);
   const year = parseInt(yStr, 10);
   if (!Number.isFinite(year)) return notFound();
   const username = decodeURIComponent(chat_username);
@@ -53,17 +57,17 @@ export default async function ChatRecapPage({
           href={`/contacts/${encodeURIComponent(username)}`}
           className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
         >
-          <ArrowLeft className="size-3.5 mr-1" /> Back to contact
+          <ArrowLeft className="size-3.5 mr-1" /> {tr("recap.backToContact")}
         </Link>
         <div className="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <p className="text-xs uppercase tracking-widest text-muted-foreground">
-              Year in Review · {recap.scopeDisplay ?? username}
+              {tr("recap.eyebrowChat")} · {recap.scopeDisplay ?? username}
             </p>
             <h1 className="text-5xl font-semibold tracking-tight mt-1">{year}</h1>
             {!recap.ok && (
               <p className="text-sm text-muted-foreground mt-2">
-                No messages with this chat in {year}.
+                {tf("recap.noChatMessages", locale, { year })}
               </p>
             )}
           </div>
@@ -84,7 +88,7 @@ export default async function ChatRecapPage({
               className="inline-flex items-center gap-1 rounded-md border border-border/60 px-3 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent"
             >
               <Download className="size-3.5" />
-              HTML
+              {tr("recap.html")}
             </a>
           </div>
         </div>
@@ -93,42 +97,62 @@ export default async function ChatRecapPage({
       {!recap.ok ? null : (
         <>
           <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Hero label="Messages" value={fmtNum(recap.totals.messages)} sub={`${fmtNum(recap.totals.mine)} you · ${fmtNum(recap.totals.theirs)} them`} />
-            <Hero label="Active days" value={`${recap.totals.days}`} sub={`out of 365`} />
-            <Hero label="Longest streak" value={`${recap.totals.longestStreak}d`} sub={`Longest gap ${recap.totals.longestDryStreak}d`} />
             <Hero
-              label="Median reply"
+              label={tr("recap.hero.messages")}
+              value={fmtNum(recap.totals.messages)}
+              sub={tf("recap.hero.messagesSub", locale, {
+                mine: fmtNum(recap.totals.mine),
+                theirs: fmtNum(recap.totals.theirs),
+              })}
+            />
+            <Hero
+              label={tr("recap.hero.activeDays")}
+              value={`${recap.totals.days}`}
+              sub={tr("recap.hero.activeDaysSub")}
+            />
+            <Hero
+              label={tr("recap.hero.longestStreak")}
+              value={`${recap.totals.longestStreak}d`}
+              sub={tf("recap.hero.longestStreakSub", locale, { n: recap.totals.longestDryStreak })}
+            />
+            <Hero
+              label={tr("recap.hero.medianReply")}
               value={
                 recap.latencyMedians.themToYouSec > 0
                   ? formatLatency(recap.latencyMedians.themToYouSec)
                   : "—"
               }
-              sub={`from them, ${recap.latencyMedians.youToThemSec > 0 ? formatLatency(recap.latencyMedians.youToThemSec) : "—"} from you`}
+              sub={tf("recap.hero.medianReplySub", locale, {
+                you:
+                  recap.latencyMedians.youToThemSec > 0
+                    ? formatLatency(recap.latencyMedians.youToThemSec)
+                    : "—",
+              })}
             />
           </section>
 
           <Section
-            title="A year of messages"
-            description="Stacked: your messages on top, theirs underneath."
+            title={tr("recap.yearOfMessages")}
+            description={tr("recap.yearOfMessagesDesc")}
           >
             <div className="overflow-x-auto">
               <MonthlyBars data={recap.monthly} />
             </div>
           </Section>
 
-          <Section title="Hour-of-day pattern" description="Who's chatting when.">
+          <Section title={tr("recap.hourPattern")} description={tr("recap.hourPatternDesc")}>
             <HourlyGrid data={recap.hourly} />
           </Section>
 
           <section className="grid gap-6 lg:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle>Top link sources</CardTitle>
-                <CardDescription>What this chat shared most.</CardDescription>
+                <CardTitle>{tr("recap.topLinksChatTitle")}</CardTitle>
+                <CardDescription>{tr("recap.topLinksChatDesc")}</CardDescription>
               </CardHeader>
               <CardContent>
                 {recap.topDomains.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No shared links this year.</p>
+                  <p className="text-sm text-muted-foreground">{tr("recap.topLinksEmpty")}</p>
                 ) : (
                   <HorizontalBars
                     rows={recap.topDomains.map((d) => ({
@@ -143,8 +167,8 @@ export default async function ChatRecapPage({
             </Card>
             <Card>
               <CardHeader>
-                <CardTitle>Records</CardTitle>
-                <CardDescription>Notable points in your year together.</CardDescription>
+                <CardTitle>{tr("recap.recordsTitle")}</CardTitle>
+                <CardDescription>{tr("recap.recordsChatDesc")}</CardDescription>
               </CardHeader>
               <CardContent>
                 <ul className="space-y-3">
@@ -172,8 +196,8 @@ export default async function ChatRecapPage({
           </section>
 
           <Section
-            title="What you talked about"
-            description="Distinctive words in this chat versus the rest of your conversations."
+            title={tr("recap.whatYouTalked")}
+            description={tr("recap.whatChatTalkedDesc")}
           >
             <KeywordCloud words={recap.keywords} limit={50} />
           </Section>
@@ -181,21 +205,30 @@ export default async function ChatRecapPage({
           <section className="grid gap-6 lg:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle>Reply latency</CardTitle>
+                <CardTitle>{tr("recap.replyLatency")}</CardTitle>
                 <CardDescription>
-                  Median them → you {recap.latencyMedians.themToYouSec > 0 ? formatLatency(recap.latencyMedians.themToYouSec) : "—"}, you → them {recap.latencyMedians.youToThemSec > 0 ? formatLatency(recap.latencyMedians.youToThemSec) : "—"}.
+                  {tf("recap.replyLatencyChatDesc", locale, {
+                    them:
+                      recap.latencyMedians.themToYouSec > 0
+                        ? formatLatency(recap.latencyMedians.themToYouSec)
+                        : "—",
+                    you:
+                      recap.latencyMedians.youToThemSec > 0
+                        ? formatLatency(recap.latencyMedians.youToThemSec)
+                        : "—",
+                  })}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <LatencyHist
                   data={recap.latencyHistThemToYou}
-                  title="them → you"
+                  title={tr("recap.themToYou")}
                   tone="primary"
                   median={recap.latencyMedians.themToYouSec > 0 ? formatLatency(recap.latencyMedians.themToYouSec) : undefined}
                 />
                 <LatencyHist
                   data={recap.latencyHistYouToThem}
-                  title="you → them"
+                  title={tr("recap.youToThem")}
                   tone="muted"
                   median={recap.latencyMedians.youToThemSec > 0 ? formatLatency(recap.latencyMedians.youToThemSec) : undefined}
                 />
@@ -203,14 +236,14 @@ export default async function ChatRecapPage({
             </Card>
             <Card>
               <CardHeader>
-                <CardTitle>Latency over time</CardTitle>
-                <CardDescription>Median monthly reply time, log scale.</CardDescription>
+                <CardTitle>{tr("recap.latencyOverTimeTitle")}</CardTitle>
+                <CardDescription>{tr("recap.latencyOverTimeChatDesc")}</CardDescription>
               </CardHeader>
               <CardContent>
                 {recap.latencyTrend.length >= 2 ? (
                   <LatencyTrend data={recap.latencyTrend} />
                 ) : (
-                  <p className="text-sm text-muted-foreground">Not enough data for a trend.</p>
+                  <p className="text-sm text-muted-foreground">{tr("recap.latencyTrendChatEmpty")}</p>
                 )}
               </CardContent>
             </Card>
@@ -220,18 +253,18 @@ export default async function ChatRecapPage({
             <section className="grid gap-6 lg:grid-cols-2">
               <Card>
                 <CardHeader>
-                  <CardTitle>Your top emoji</CardTitle>
+                  <CardTitle>{tr("recap.topEmojiYours")}</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <EmojiRow items={recap.topEmojiMine} />
+                  <EmojiRow items={recap.topEmojiMine} emptyText={tr("recap.noEmoji")} />
                 </CardContent>
               </Card>
               <Card>
                 <CardHeader>
-                  <CardTitle>Their top emoji</CardTitle>
+                  <CardTitle>{tr("recap.topEmojiTheirs")}</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <EmojiRow items={recap.topEmojiTheirs} />
+                  <EmojiRow items={recap.topEmojiTheirs} emptyText={tr("recap.noEmoji")} />
                 </CardContent>
               </Card>
             </section>
@@ -240,18 +273,18 @@ export default async function ChatRecapPage({
           <section className="grid gap-6 lg:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle>First & last message</CardTitle>
-                <CardDescription>How the year opened and closed.</CardDescription>
+                <CardTitle>{tr("recap.bookendsTitle")}</CardTitle>
+                <CardDescription>{tr("recap.bookendsDesc")}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <Bookend label="First" m={recap.firstMessage} />
-                <Bookend label="Last" m={recap.lastMessage} />
+                <Bookend label={tr("recap.first")} m={recap.firstMessage} locale={locale} />
+                <Bookend label={tr("recap.last")} m={recap.lastMessage} locale={locale} />
               </CardContent>
             </Card>
             <Card>
               <CardHeader>
-                <CardTitle>Busiest day</CardTitle>
-                <CardDescription>The day with the most messages.</CardDescription>
+                <CardTitle>{tr("recap.busiestDayTitle")}</CardTitle>
+                <CardDescription>{tr("recap.busiestDayDesc")}</CardDescription>
               </CardHeader>
               <CardContent>
                 {recap.busiestDay ? (
@@ -263,18 +296,20 @@ export default async function ChatRecapPage({
                       <Calendar className="size-3.5" /> {recap.busiestDay.day}
                     </p>
                     <p className="text-2xl font-semibold tabular-nums mt-1">
-                      {fmtNum(recap.busiestDay.n)} messages
+                      {fmtNum(recap.busiestDay.n)} {tr("recap.hero.msgs")}
                     </p>
                   </Link>
                 ) : (
-                  <p className="text-sm text-muted-foreground">No day stands out.</p>
+                  <p className="text-sm text-muted-foreground">{tr("recap.busiestDayNoneChat")}</p>
                 )}
               </CardContent>
             </Card>
           </section>
 
           <p className="text-xs text-muted-foreground text-center pt-4">
-            Computed {format(new Date(recap.computedAt), "PPpp")} · everything local to your machine
+            {tf("recap.computedChatFooter", locale, {
+              when: format(new Date(recap.computedAt), "PPpp"),
+            })}
           </p>
         </>
       )}
@@ -321,6 +356,7 @@ function Hero({ label, value, sub }: { label: string; value: string; sub?: strin
 function Bookend({
   label,
   m,
+  locale,
 }: {
   label: string;
   m: {
@@ -330,8 +366,10 @@ function Bookend({
     content: string;
     timestamp: number;
   } | null;
+  locale: "en" | "zh";
 }) {
   if (!m) return null;
+  const tr = (k: TKey) => t(k, locale);
   return (
     <div className="border-l-2 border-primary/40 pl-3 space-y-1">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -340,13 +378,13 @@ function Bookend({
         <span>·</span>
         <span className="tabular-nums">{format(new Date(m.timestamp * 1000), "MMM d, HH:mm")}</span>
       </div>
-      <p className="text-sm whitespace-pre-wrap break-words">{m.content || "(no text)"}</p>
+      <p className="text-sm whitespace-pre-wrap break-words">{m.content || tr("recap.noText")}</p>
     </div>
   );
 }
 
-function EmojiRow({ items }: { items: { emoji: string; n: number }[] }) {
-  if (items.length === 0) return <p className="text-sm text-muted-foreground">No emoji.</p>;
+function EmojiRow({ items, emptyText }: { items: { emoji: string; n: number }[]; emptyText: string }) {
+  if (items.length === 0) return <p className="text-sm text-muted-foreground">{emptyText}</p>;
   const max = Math.max(...items.map((x) => x.n));
   return (
     <div className="flex items-center gap-3 flex-wrap">

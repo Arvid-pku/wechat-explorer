@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { listSessions } from "@/lib/queries";
+import { listSessions, countSessions } from "@/lib/queries";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -29,21 +29,23 @@ import {
   ColumnSection,
   ColumnSearchInput,
 } from "@/components/contacts/column-header";
+import { t, tf, type Locale, type TKey } from "@/lib/i18n";
+import { getServerLocale } from "@/lib/i18n-server";
 
 export const dynamic = "force-dynamic";
 
 const TYPE_OPTIONS = [
-  { key: "all", label: "All types", Icon: Users },
-  { key: "private", label: "Private", Icon: Users },
-  { key: "group", label: "Group", Icon: MessageSquare },
-  { key: "official", label: "Official", Icon: Building },
-  { key: "folded", label: "Folded", Icon: Folder },
+  { key: "all", labelKey: "contacts.typeAll", Icon: Users },
+  { key: "private", labelKey: "contacts.typePrivate", Icon: Users },
+  { key: "group", labelKey: "contacts.typeGroup", Icon: MessageSquare },
+  { key: "official", labelKey: "contacts.typeOfficial", Icon: Building },
+  { key: "folded", labelKey: "contacts.typeFolded", Icon: Folder },
 ] as const;
 
 const VIEW_OPTIONS = [
-  { key: "active", label: "Active" },
-  { key: "archived", label: "Archived" },
-  { key: "all", label: "All" },
+  { key: "active", labelKey: "contacts.viewActive" },
+  { key: "archived", labelKey: "contacts.viewArchived" },
+  { key: "all", labelKey: "contacts.viewAll" },
 ] as const;
 
 interface SortInfo {
@@ -79,16 +81,32 @@ export default async function ContactsPage({
   searchParams: Promise<{ type?: string; sort?: string; q?: string; view?: string }>;
 }) {
   const sp = await searchParams;
-  const type = sp.type ?? "all";
+  const locale = await getServerLocale();
+  const tr = (k: TKey) => t(k, locale);
+  // Validate filter inputs against their option-key allowlist so a stray /
+  // crafted ?type= can't produce confusing filter chips ("Type: <script>")
+  // or empty SQL results. Unknown values fall back to the safe default.
+  const VALID_TYPES = new Set(TYPE_OPTIONS.map((o) => o.key as string));
+  const VALID_VIEWS = new Set(VIEW_OPTIONS.map((o) => o.key as string));
+  const type = sp.type && VALID_TYPES.has(sp.type) ? sp.type : "all";
   const sort = parseSort(sp.sort);
   const q = sp.q ?? "";
-  const view = sp.view ?? "active";
+  const view = sp.view && VALID_VIEWS.has(sp.view) ? sp.view : "active";
 
+  const PAGE_LIMIT = 300;
   const rows = listSessions({
     type,
     sort: sp.sort,
     q,
-    limit: 300,
+    limit: PAGE_LIMIT,
+    onlyArchived: view === "archived",
+    includeArchived: view === "all",
+  });
+  // Used to render "Showing N of M" so users don't think the 300-row cap is
+  // the absolute total.
+  const totalMatching = countSessions({
+    type,
+    q,
     onlyArchived: view === "archived",
     includeArchived: view === "all",
   });
@@ -110,18 +128,43 @@ export default async function ContactsPage({
   const typeActive = type !== "all";
   const filterCount =
     (typeActive ? 1 : 0) + (q ? 1 : 0) + (view !== "active" ? 1 : 0);
+  const sessionWord = (n: number) =>
+    locale === "zh" ? tr("contacts.session") : n === 1 ? tr("contacts.session") : tr("contacts.sessions");
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-6">
       <header className="flex items-end justify-between gap-3 flex-wrap">
         <div className="space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight">Contacts</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{tr("contacts.title")}</h1>
           <p className="text-sm text-muted-foreground">
-            {rows.length.toLocaleString()} session
-            {rows.length === 1 ? "" : "s"}
-            {filterCount > 0 && " matching filters"}
-            {view === "archived" && " · viewing archived"}
-            {view === "all" && " · including archived"}
+            {rows.length < totalMatching ? (
+              <>
+                {locale === "zh" ? (
+                  <>
+                    {tr("contacts.showingOf").replace("{n}", "")}
+                    <span className="tabular-nums">{rows.length.toLocaleString()}</span>
+                    {" / 共 "}
+                    <span className="tabular-nums">{totalMatching.toLocaleString()}</span>
+                    {" "}
+                    {sessionWord(totalMatching)}
+                  </>
+                ) : (
+                  <>
+                    Showing <span className="tabular-nums">{rows.length.toLocaleString()}</span> of{" "}
+                    <span className="tabular-nums">{totalMatching.toLocaleString()}</span>{" "}
+                    {sessionWord(totalMatching)}
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                <span className="tabular-nums">{totalMatching.toLocaleString()}</span>{" "}
+                {sessionWord(totalMatching)}
+              </>
+            )}
+            {filterCount > 0 && " " + tr("contacts.matchingFilters")}
+            {view === "archived" && " · " + tr("contacts.viewingArchived")}
+            {view === "all" && " · " + tr("contacts.includingArchived")}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -129,24 +172,24 @@ export default async function ContactsPage({
             <Link
               href="/contacts"
               className="inline-flex items-center gap-1 rounded-md border border-border/60 px-3 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent"
-              title="Clear all filters"
+              title={tr("contacts.clearAll")}
             >
-              <X className="size-3.5" /> Clear
+              <X className="size-3.5" /> {tr("contacts.clear")}
             </Link>
           )}
           <a
             href="/api/export/sessions?format=csv"
             className="inline-flex items-center gap-1 rounded-md border border-border/60 px-3 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent"
-            title="Download sessions as CSV"
+            title={tr("contacts.downloadCsv")}
           >
-            <Download className="size-3.5" /> CSV
+            <Download className="size-3.5" /> {tr("contacts.csv")}
           </a>
           <a
             href="/api/export/sessions?format=json"
             className="inline-flex items-center gap-1 rounded-md border border-border/60 px-3 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent"
-            title="Download sessions as JSON"
+            title={tr("contacts.downloadJson")}
           >
-            <Download className="size-3.5" /> JSON
+            <Download className="size-3.5" /> {tr("contacts.json")}
           </a>
         </div>
       </header>
@@ -156,45 +199,51 @@ export default async function ContactsPage({
       {(q || typeActive || view !== "active") && (
         <div className="flex items-center gap-1.5 flex-wrap text-xs">
           {q && (
-            <Chip label={`Name: ${q}`} href={href({ q: null })} />
+            <Chip label={`${tr("contacts.chipName")}: ${q}`} href={href({ q: null })} />
           )}
           {typeActive && (
-            <Chip label={`Type: ${type}`} href={href({ type: null })} />
+            <Chip
+              label={`${tr("contacts.chipType")}: ${typeLabel(type, locale)}`}
+              href={href({ type: null })}
+            />
           )}
           {view !== "active" && (
-            <Chip label={`View: ${view}`} href={href({ view: null })} />
+            <Chip
+              label={`${tr("contacts.chipView")}: ${viewLabel(view, locale)}`}
+              href={href({ view: null })}
+            />
           )}
         </div>
       )}
 
       <Card className="p-0 overflow-hidden">
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead className="pl-6">
                   <ColumnHeader
-                    label="Name"
+                    label={tr("contacts.colName")}
                     sortDirection={sort.key === "name" ? sort.direction : undefined}
                     filterActive={!!q}
                   >
-                    <ColumnSection label="Sort" />
+                    <ColumnSection label={tr("contacts.sectionSort")} />
                     <ColumnOption
                       href={href({ sort: sortValue("name", "asc") })}
                       active={sort.key === "name" && sort.direction === "asc"}
                       icon={<ArrowDown className="size-3.5" />}
                     >
-                      A → Z
+                      {tr("contacts.sortAZ")}
                     </ColumnOption>
                     <ColumnOption
                       href={href({ sort: sortValue("name", "desc") })}
                       active={sort.key === "name" && sort.direction === "desc"}
                       icon={<ArrowUp className="size-3.5" />}
                     >
-                      Z → A
+                      {tr("contacts.sortZA")}
                     </ColumnOption>
                     <ColumnDivider />
-                    <ColumnSection label="Filter" />
+                    <ColumnSection label={tr("contacts.sectionFilter")} />
                     <ColumnSearchInput
                       path="/contacts"
                       name="q"
@@ -209,34 +258,34 @@ export default async function ContactsPage({
                 </TableHead>
                 <TableHead>
                   <ColumnHeader
-                    label="Type"
+                    label={tr("contacts.colType")}
                     filterActive={typeActive}
                   >
-                    <ColumnSection label="Show type" />
-                    {TYPE_OPTIONS.map((t) => {
-                      const Icon = t.Icon;
+                    <ColumnSection label={tr("contacts.sectionShowType")} />
+                    {TYPE_OPTIONS.map((opt) => {
+                      const Icon = opt.Icon;
                       return (
                         <ColumnOption
-                          key={t.key}
-                          href={href({ type: t.key === "all" ? null : t.key })}
+                          key={opt.key}
+                          href={href({ type: opt.key === "all" ? null : opt.key })}
                           active={
-                            (t.key === "all" && type === "all") || type === t.key
+                            (opt.key === "all" && type === "all") || type === opt.key
                           }
                           icon={<Icon className="size-3.5" />}
                         >
-                          {t.label}
+                          {tr(opt.labelKey as TKey)}
                         </ColumnOption>
                       );
                     })}
                     <ColumnDivider />
-                    <ColumnSection label="Archived" />
+                    <ColumnSection label={tr("contacts.sectionArchived")} />
                     {VIEW_OPTIONS.map((v) => (
                       <ColumnOption
                         key={v.key}
                         href={href({ view: v.key === "active" ? null : v.key })}
                         active={view === v.key}
                       >
-                        {v.label}
+                        {tr(v.labelKey as TKey)}
                       </ColumnOption>
                     ))}
                   </ColumnHeader>
@@ -244,13 +293,13 @@ export default async function ContactsPage({
                 <TableHead className="text-right">
                   <div className="flex justify-end">
                     <ColumnHeader
-                      label="Messages"
+                      label={tr("contacts.colMessages")}
                       align="right"
                       sortDirection={
                         sort.key === "messages" ? sort.direction : undefined
                       }
                     >
-                      <ColumnSection label="Sort" />
+                      <ColumnSection label={tr("contacts.sectionSort")} />
                       <ColumnOption
                         href={href({ sort: sortValue("messages", "desc") })}
                         active={
@@ -258,7 +307,7 @@ export default async function ContactsPage({
                         }
                         icon={<ArrowUp className="size-3.5" />}
                       >
-                        High → Low
+                        {tr("contacts.sortHighLow")}
                       </ColumnOption>
                       <ColumnOption
                         href={href({ sort: sortValue("messages", "asc") })}
@@ -267,7 +316,7 @@ export default async function ContactsPage({
                         }
                         icon={<ArrowDown className="size-3.5" />}
                       >
-                        Low → High
+                        {tr("contacts.sortLowHigh")}
                       </ColumnOption>
                     </ColumnHeader>
                   </div>
@@ -275,26 +324,26 @@ export default async function ContactsPage({
                 <TableHead className="text-right">
                   <div className="flex justify-end">
                     <ColumnHeader
-                      label="Links"
+                      label={tr("contacts.colLinks")}
                       align="right"
                       sortDirection={
                         sort.key === "urls" ? sort.direction : undefined
                       }
                     >
-                      <ColumnSection label="Sort" />
+                      <ColumnSection label={tr("contacts.sectionSort")} />
                       <ColumnOption
                         href={href({ sort: sortValue("urls", "desc") })}
                         active={sort.key === "urls" && sort.direction === "desc"}
                         icon={<ArrowUp className="size-3.5" />}
                       >
-                        High → Low
+                        {tr("contacts.sortHighLow")}
                       </ColumnOption>
                       <ColumnOption
                         href={href({ sort: sortValue("urls", "asc") })}
                         active={sort.key === "urls" && sort.direction === "asc"}
                         icon={<ArrowDown className="size-3.5" />}
                       >
-                        Low → High
+                        {tr("contacts.sortLowHigh")}
                       </ColumnOption>
                     </ColumnHeader>
                   </div>
@@ -302,13 +351,13 @@ export default async function ContactsPage({
                 <TableHead className="text-right pr-6">
                   <div className="flex justify-end">
                     <ColumnHeader
-                      label="Last active"
+                      label={tr("contacts.colLastActive")}
                       align="right"
                       sortDirection={
                         sort.key === "recent" ? sort.direction : undefined
                       }
                     >
-                      <ColumnSection label="Sort" />
+                      <ColumnSection label={tr("contacts.sectionSort")} />
                       <ColumnOption
                         href={href({ sort: sortValue("recent", "desc") })}
                         active={
@@ -316,7 +365,7 @@ export default async function ContactsPage({
                         }
                         icon={<ArrowUp className="size-3.5" />}
                       >
-                        Newest first
+                        {tr("contacts.sortNewest")}
                       </ColumnOption>
                       <ColumnOption
                         href={href({ sort: sortValue("recent", "asc") })}
@@ -325,7 +374,7 @@ export default async function ContactsPage({
                         }
                         icon={<ArrowDown className="size-3.5" />}
                       >
-                        Oldest first
+                        {tr("contacts.sortOldest")}
                       </ColumnOption>
                     </ColumnHeader>
                   </div>
@@ -344,15 +393,19 @@ export default async function ContactsPage({
                     </Link>
                     {row.unread > 0 && (
                       <Badge variant="secondary" className="ml-2">
-                        {row.unread} unread
+                        {row.unread} {tr("contacts.unread")}
                       </Badge>
                     )}
                   </TableCell>
                   <TableCell>
-                    <TypeBadge type={row.chat_type} />
+                    <TypeBadge type={row.chat_type} locale={locale} />
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground">
-                    <CountCell n={row.message_count} capNote={row.last_history_error} />
+                    <CountCell
+                      n={row.message_count}
+                      capNote={row.last_history_error}
+                      locale={locale}
+                    />
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground">
                     {row.url_count.toLocaleString()}
@@ -369,7 +422,7 @@ export default async function ContactsPage({
               {rows.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={5} className="py-12 text-center text-muted-foreground">
-                    No sessions match.
+                    {tr("contacts.noSessions")}
                   </TableCell>
                 </TableRow>
               )}
@@ -381,7 +434,28 @@ export default async function ContactsPage({
   );
 }
 
-function TypeBadge({ type }: { type: string }) {
+function typeLabel(type: string, locale: Locale): string {
+  const tr = (k: TKey) => t(k, locale);
+  switch (type) {
+    case "private":  return tr("contacts.typePrivate");
+    case "group":    return tr("contacts.typeGroup");
+    case "official": return tr("contacts.typeOfficial");
+    case "folded":   return tr("contacts.typeFolded");
+    default:         return type;
+  }
+}
+
+function viewLabel(view: string, locale: Locale): string {
+  const tr = (k: TKey) => t(k, locale);
+  switch (view) {
+    case "active":   return tr("contacts.viewActive");
+    case "archived": return tr("contacts.viewArchived");
+    case "all":      return tr("contacts.viewAll");
+    default:         return view;
+  }
+}
+
+function TypeBadge({ type, locale }: { type: string; locale: Locale }) {
   const variants: Record<string, string> = {
     private: "bg-blue-500/10 text-blue-700 dark:text-blue-300",
     group: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
@@ -391,7 +465,9 @@ function TypeBadge({ type }: { type: string }) {
   };
   const klass = variants[type] ?? variants.other;
   return (
-    <span className={`rounded px-2 py-0.5 text-xs font-medium ${klass}`}>{type}</span>
+    <span className={`rounded px-2 py-0.5 text-xs font-medium ${klass}`}>
+      {typeLabel(type, locale)}
+    </span>
   );
 }
 
@@ -404,14 +480,22 @@ function TypeBadge({ type }: { type: string }) {
  * whose history was capped under the old 10k single-run limit and never
  * re-indexed under the new logic.
  */
-function CountCell({ n, capNote }: { n: number; capNote: string | null }) {
+function CountCell({
+  n,
+  capNote,
+  locale,
+}: {
+  n: number;
+  capNote: string | null;
+  locale: Locale;
+}) {
   const stillCapped = capNote ? capNote.startsWith("hit ") : false;
   const legacyCapped = n === 10_000 && !capNote;
   const looksCapped = stillCapped || legacyCapped;
   const tooltip = stillCapped
-    ? `${n.toLocaleString()} indexed · ${capNote}. Run Deep index from Settings to continue backfilling.`
+    ? tf("contacts.cappedTooltip", locale, { n: n.toLocaleString(), note: capNote ?? "" })
     : legacyCapped
-      ? `${n.toLocaleString()} indexed — likely capped under the old 10,000-msg limit. Run Deep index from Settings to backfill older history.`
+      ? tf("contacts.cappedLegacyTooltip", locale, { n: n.toLocaleString() })
       : undefined;
   return (
     <span

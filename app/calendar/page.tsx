@@ -28,6 +28,8 @@ import {
   buildArchivedFilterHref,
 } from "@/components/archived-filter-pill";
 import { X, UserCircle2 } from "lucide-react";
+import { t, tf, type Locale, type TKey } from "@/lib/i18n";
+import { getServerLocale } from "@/lib/i18n-server";
 
 export const dynamic = "force-dynamic";
 
@@ -74,6 +76,8 @@ export default async function CalendarPage({
   }>;
 }) {
   const sp = await searchParams;
+  const locale = await getServerLocale();
+  const tr = (k: TKey) => t(k, locale);
   const includeArchived = sp.archived === "1";
 
   // Resolve the chat scope first — if the username doesn't match any session
@@ -109,12 +113,16 @@ export default async function CalendarPage({
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-6">
       <header className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Calendar</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{tr("calendar.title")}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {summary.total.toLocaleString()} messages in {year}
+            {tf("calendar.summary", locale, {
+              n: summary.total.toLocaleString(),
+              year,
+            })}
             {summary.busiestDay ? (
               <>
-                {" · busiest day "}
+                {" · "}
+                {tr("calendar.busiestDay")}{" "}
                 <Link
                   href={calendarHref(sp, { year: String(year), day: summary.busiestDay.day })}
                   className="underline-offset-2 hover:underline"
@@ -150,6 +158,7 @@ export default async function CalendarPage({
           <ArchivedFilterPill
             on={includeArchived}
             href={buildArchivedFilterHref("/calendar", sp, includeArchived)}
+            locale={locale}
           />
           <Link
             href={
@@ -161,7 +170,7 @@ export default async function CalendarPage({
             }
             className="rounded-md border border-border/60 px-3 py-1 text-sm hover:bg-accent"
           >
-            View {year} Recap →
+            {tf("calendar.viewRecap", locale, { year })}
           </Link>
         </div>
       </header>
@@ -169,7 +178,7 @@ export default async function CalendarPage({
       {scopeUsername && (
         <div className="flex items-center gap-2 flex-wrap rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
           <UserCircle2 className="size-3.5 text-primary" />
-          <span className="text-muted-foreground">Filtered to chat:</span>
+          <span className="text-muted-foreground">{tr("calendar.filteredToChat")}</span>
           <Link
             href={`/contacts/${encodeURIComponent(scopeUsername)}`}
             className="font-medium text-foreground hover:underline truncate max-w-[40ch]"
@@ -179,9 +188,9 @@ export default async function CalendarPage({
           <Link
             href={calendarHref(sp, { chat: null })}
             className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-            title="Clear chat filter"
+            title={tr("calendar.clearFilter")}
           >
-            <X className="size-3" /> clear
+            <X className="size-3" /> {tr("calendar.clear")}
           </Link>
         </div>
       )}
@@ -189,14 +198,14 @@ export default async function CalendarPage({
       <Card>
         <CardHeader>
           <CardTitle>
-            Activity heatmap — {year}
+            {tr("calendar.heatmapTitle")} — {year}
             {scopeUsername && scopeDisplay && (
               <span className="text-muted-foreground font-normal">
                 {" "}· {scopeDisplay}
               </span>
             )}
           </CardTitle>
-          <CardDescription>Click any day to deep-dive</CardDescription>
+          <CardDescription>{tr("calendar.heatmapDesc")}</CardDescription>
         </CardHeader>
         <CardContent>
           <HeatmapClient year={year} data={data} selected={day} />
@@ -211,6 +220,7 @@ export default async function CalendarPage({
           scopeUsername={scopeUsername}
           scopeDisplay={scopeDisplay}
           sp={sp}
+          locale={locale}
         />
       ) : (
         <YearOverview
@@ -219,6 +229,7 @@ export default async function CalendarPage({
           includeArchived={includeArchived}
           scopeUsername={scopeUsername}
           sp={sp}
+          locale={locale}
         />
       )}
     </div>
@@ -231,13 +242,16 @@ function YearOverview({
   includeArchived,
   scopeUsername,
   sp,
+  locale,
 }: {
   year: number;
   summary: ReturnType<typeof getYearSummary>;
   includeArchived: boolean;
   scopeUsername: string | null;
   sp: Record<string, string | undefined>;
+  locale: Locale;
 }) {
+  const tr = (k: TKey) => t(k, locale);
   const yearKeywords = getYearKeywords(year, {
     includeArchived,
     chatUsername: scopeUsername,
@@ -246,37 +260,39 @@ function YearOverview({
     <div className="grid gap-6 md:grid-cols-3">
       <Card className="md:col-span-2">
         <CardHeader>
-          <CardTitle>What was {year} about</CardTitle>
+          <CardTitle>{tf("calendar.whatWasItAbout", locale, { year })}</CardTitle>
           <CardDescription>
             {scopeUsername
-              ? `Top-30 distinctive terms in this chat in ${year} vs your all-time chat baseline.`
-              : `Top-30 distinctive terms in ${year} vs your all-time chat baseline (sampled).`}
+              ? tf("calendar.whatChatDesc", locale, { year })
+              : tf("calendar.whatGlobalDesc", locale, { year })}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <KeywordCloud
             words={yearKeywords.words}
-            empty="Not enough text in this year to extract keywords."
+            empty={tr("calendar.noKeywords")}
           />
         </CardContent>
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>Year at a glance</CardTitle>
+          <CardTitle>{tr("calendar.yearGlanceTitle")}</CardTitle>
           <CardDescription>
-            {scopeUsername ? `${year} for this chat` : `${year} totals after exclusions`}
+            {scopeUsername
+              ? tf("calendar.yearGlanceChatDesc", locale, { year })
+              : tf("calendar.yearGlanceGlobalDesc", locale, { year })}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
-          <SummaryRow label="Total messages" value={summary.total.toLocaleString()} />
+          <SummaryRow label={tr("calendar.totalMessages")} value={summary.total.toLocaleString()} />
           {!scopeUsername && (
             <SummaryRow
-              label="Unique chats"
+              label={tr("calendar.uniqueChats")}
               value={summary.uniqueChats.toLocaleString()}
             />
           )}
           <SummaryRow
-            label="Your share"
+            label={tr("calendar.yourShare")}
             value={
               summary.myMessages > 0
                 ? `${pct(summary.myShare)} (${summary.myMessages.toLocaleString()})`
@@ -284,7 +300,7 @@ function YearOverview({
             }
           />
           <SummaryRow
-            label="Busiest day"
+            label={tr("calendar.busiestDayLabel")}
             value={
               summary.busiestDay ? (
                 <Link
@@ -323,6 +339,7 @@ function DayDetail({
   scopeUsername,
   scopeDisplay,
   sp,
+  locale,
 }: {
   day: string;
   year: number;
@@ -330,7 +347,9 @@ function DayDetail({
   scopeUsername: string | null;
   scopeDisplay: string | null;
   sp: Record<string, string | undefined>;
+  locale: Locale;
 }) {
+  const tr = (k: TKey) => t(k, locale);
   const groups = getDayMessagesGrouped(day, {
     includeArchived,
     chatUsername: scopeUsername,
@@ -362,10 +381,10 @@ function DayDetail({
           <CardTitle className="flex items-center gap-3 flex-wrap">
             {headerDate}
             <Badge variant="outline" className="font-normal">
-              {total.toLocaleString()} messages
+              {total.toLocaleString()} {tr("calendar.messagesLabel")}
             </Badge>
             <Badge variant="outline" className="font-normal">
-              {groups.length.toLocaleString()} chat{groups.length === 1 ? "" : "s"}
+              {groups.length.toLocaleString()} {tr("calendar.chatsLabel")}
             </Badge>
             {scopeUsername && scopeDisplay && (
               <Badge variant="secondary" className="font-normal">
@@ -373,14 +392,14 @@ function DayDetail({
               </Badge>
             )}
           </CardTitle>
-          <CardDescription>Hour-by-hour activity for {day}</CardDescription>
+          <CardDescription>{tf("calendar.dayHourly", locale, { day })}</CardDescription>
         </CardHeader>
         <CardContent>
           {total === 0 ? (
             <p className="text-sm text-muted-foreground">
               {scopeUsername
-                ? "No messages with this chat on this day."
-                : "No indexed messages on this day — try a deep index from Settings."}
+                ? tr("calendar.dayChatEmpty")
+                : tr("calendar.dayGlobalEmpty")}
             </p>
           ) : (
             <HourlyHeatmap data={hourly} />
@@ -390,18 +409,22 @@ function DayDetail({
 
       <Card>
         <CardHeader>
-          <CardTitle>What was on the table</CardTitle>
+          <CardTitle>{tr("calendar.onTheTableTitle")}</CardTitle>
           <CardDescription>
-            Top-30 distinctive terms vs the trailing 365-day sampled baseline
-            {keywords.subsetSize > 0
-              ? ` · from ${keywords.subsetSize.toLocaleString()} text messages`
-              : ""}
+            {tf("calendar.onTheTableDesc", locale, {
+              suffix:
+                keywords.subsetSize > 0
+                  ? tf("calendar.onTheTableSuffix", locale, {
+                      n: keywords.subsetSize.toLocaleString(),
+                    })
+                  : "",
+            })}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <KeywordCloud
             words={keywords.words}
-            empty="Not enough text messages on this day to extract keywords."
+            empty={tr("calendar.dayNoKeywords")}
           />
         </CardContent>
       </Card>
@@ -409,10 +432,12 @@ function DayDetail({
       {onThisDay.length > 0 ? (
         <Card>
           <CardHeader>
-            <CardTitle>On this day in previous years</CardTitle>
+            <CardTitle>{tr("calendar.onThisDayTitle")}</CardTitle>
             <CardDescription>
-              Same {monthDay} across earlier years that have data
-              {scopeUsername ? " with this chat" : ""}
+              {tf("calendar.onThisDayDesc", locale, {
+                monthDay,
+                scope: scopeUsername ? tr("calendar.onThisDayChatScope") : "",
+              })}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -426,11 +451,11 @@ function DayDetail({
                   <Badge className="shrink-0 font-mono">{y.year}</Badge>
                   <div className="min-w-0 flex-1 space-y-1">
                     <p className="text-sm font-medium">
-                      {y.total.toLocaleString()} messages
+                      {y.total.toLocaleString()} {tr("calendar.messagesLabel")}
                     </p>
                     {y.samples.length === 0 ? (
                       <p className="text-xs text-muted-foreground italic">
-                        (no text snippets — links/images/etc.)
+                        {tr("calendar.noTextSnippets")}
                       </p>
                     ) : (
                       <ul className="text-xs text-muted-foreground space-y-0.5">
@@ -459,18 +484,19 @@ function DayDetail({
 
       <Card>
         <CardHeader>
-          <CardTitle>{scopeUsername ? "Messages" : "Chats this day"}</CardTitle>
+          <CardTitle>
+            {scopeUsername ? tr("calendar.messagesTitle") : tr("calendar.chatsThisDayTitle")}
+          </CardTitle>
           <CardDescription>
             {scopeUsername
-              ? "Latest messages from this chat on this day"
-              : "One row per session, sorted by message count"}
+              ? tr("calendar.messagesChatDesc")
+              : tr("calendar.messagesGlobalDesc")}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {groups.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              Nothing indexed for {day}. If you expect messages here, try a deep
-              reindex from Settings.
+              {tf("calendar.dayEmpty", locale, { day })}
             </p>
           ) : (
             groups.map((g, i) => (
@@ -478,6 +504,7 @@ function DayDetail({
                 key={`${g.chat_username ?? "null"}::${g.chat_display}`}
                 group={g}
                 openByDefault={i === 0 || groups.length === 1}
+                locale={locale}
               />
             ))
           )}
@@ -490,10 +517,13 @@ function DayDetail({
 function ChatGroupCard({
   group,
   openByDefault,
+  locale,
 }: {
   group: ReturnType<typeof getDayMessagesGrouped>[number];
   openByDefault: boolean;
+  locale: Locale;
 }) {
+  const tr = (k: TKey) => t(k, locale);
   const chatHref = group.chat_username
     ? `/contacts/${encodeURIComponent(group.chat_username)}`
     : null;
@@ -521,13 +551,19 @@ function ChatGroupCard({
           </Badge>
         ) : null}
         <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
-          <span>{group.n.toLocaleString()} msgs</span>
-          {lastAt ? <span>· last {lastAt}</span> : null}
+          <span>
+            {group.n.toLocaleString()} {tr("calendar.msgsLabel")}
+          </span>
+          {lastAt ? (
+            <span>
+              · {tr("calendar.lastPrefix")} {lastAt}
+            </span>
+          ) : null}
         </span>
       </summary>
       <div className="border-t border-border/60 divide-y divide-border/60">
         {group.sample.length === 0 ? (
-          <p className="p-3 text-xs text-muted-foreground">No sample available.</p>
+          <p className="p-3 text-xs text-muted-foreground">{tr("calendar.noSample")}</p>
         ) : (
           group.sample.map((m) => (
             <div key={m.id} className="px-3 py-2 text-sm space-y-1">
@@ -548,7 +584,7 @@ function ChatGroupCard({
                 <Link
                   href={`/messages/${m.id}`}
                   className="tabular-nums hover:text-foreground hover:underline"
-                  title="Open message permalink"
+                  title={tr("messages.permalink")}
                 >
                   {format(new Date(m.timestamp * 1000), "HH:mm:ss")}
                 </Link>
