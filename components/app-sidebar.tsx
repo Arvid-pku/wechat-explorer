@@ -54,7 +54,14 @@ export function AppSidebar({ onOpenCommand }: AppSidebarProps) {
     // `self-start` is needed so the flex container doesn't stretch the
     // sticky element to the document height (which would defeat sticky).
     <aside className="hidden md:flex md:w-60 lg:w-64 shrink-0 flex-col border-r border-border/60 bg-sidebar text-sidebar-foreground sticky top-0 h-screen self-start overflow-y-auto">
-      <div className="flex h-14 items-center gap-2 border-b border-border/60 px-4 font-semibold">
+      {/* macOS `hiddenInset` shows traffic lights at top-left; the pl-20 keeps
+        * the brand text from sitting under them. `data-app-region="drag"` lets
+        * the user drag the window from this strip in the packaged Electron
+        * build (no-op in plain browsers). */}
+      <div
+        data-app-region="drag"
+        className="flex h-14 items-center gap-2 border-b border-border/60 pl-20 pr-4 font-semibold"
+      >
         <span className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary">
           <Sparkles className="size-4" />
         </span>
@@ -62,7 +69,9 @@ export function AppSidebar({ onOpenCommand }: AppSidebarProps) {
       </div>
 
       <button
+        type="button"
         onClick={onOpenCommand}
+        data-app-region="no-drag"
         className="mx-3 mt-3 flex items-center justify-between rounded-md border border-border/60 bg-background px-3 py-2 text-sm text-muted-foreground hover:bg-accent"
       >
         <span className="flex items-center gap-2">

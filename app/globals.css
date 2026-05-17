@@ -128,3 +128,15 @@
     @apply font-sans;
   }
 }
+
+/* Electron-only: with `titleBarStyle: "hiddenInset"` macOS hides the title bar
+ * but the web content has to opt-in to dragging the window. Anything in the
+ * top strip with this attribute drags the window; interactive children are
+ * marked `no-drag` so clicks still register. `-webkit-app-region` is silently
+ * ignored outside Electron / WebKit-on-macOS, so this is safe in plain browsers. */
+[data-app-region="drag"] {
+  -webkit-app-region: drag;
+}
+[data-app-region="no-drag"] {
+  -webkit-app-region: no-drag;
+}

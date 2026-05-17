@@ -1,6 +1,6 @@
 {
   "name": "wechat-explorer",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Local-first explorer for your WeChat chat history",
   "author": "WeChat Explorer contributors",

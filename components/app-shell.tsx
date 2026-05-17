@@ -15,10 +15,15 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="flex min-h-screen w-full">
       <AppSidebar onOpenCommand={openPalette} />
       <main className="flex-1 min-w-0 flex flex-col">
-        <header className="sticky top-0 z-10 flex h-14 items-center justify-end gap-2 border-b border-border/60 bg-background/80 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-          <ExportHtmlButton />
-          <LanguageToggle />
-          <ThemeToggle />
+        <header
+          data-app-region="drag"
+          className="sticky top-0 z-10 flex h-14 items-center justify-end gap-2 border-b border-border/60 bg-background/80 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60"
+        >
+          <div data-app-region="no-drag" className="flex items-center gap-2">
+            <ExportHtmlButton />
+            <LanguageToggle />
+            <ThemeToggle />
+          </div>
         </header>
         <div className="flex-1 min-w-0">{children}</div>
       </main>

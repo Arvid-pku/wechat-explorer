@@ -446,19 +446,28 @@ export function countSessions(opts: { type?: string; q?: string; includeArchived
   const db = getDb();
   const conditions: string[] = [];
   const params: (string | number)[] = [];
-  if (opts.onlyArchived) conditions.push("archived = 1");
-  else if (!opts.includeArchived) conditions.push("archived = 0");
+  if (opts.onlyArchived) conditions.push("s.archived = 1");
+  else if (!opts.includeArchived) conditions.push("s.archived = 0");
   if (opts.type && opts.type !== "all") {
-    conditions.push("chat_type = ?");
+    conditions.push("s.chat_type = ?");
     params.push(opts.type);
   }
   if (opts.q) {
-    conditions.push("display_name LIKE ?");
-    params.push(`%${opts.q}%`);
+    // Mirror listSessions's q-filter so the "showing X / total" math agrees
+    // with the rendered rows when the user types in the name filter.
+    conditions.push(
+      "(s.display_name LIKE ? OR c.display_name LIKE ? OR s.username LIKE ?)",
+    );
+    const like = `%${opts.q}%`;
+    params.push(like, like, like);
   }
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   return (
-    db.prepare(`SELECT COUNT(*) AS n FROM sessions ${where}`).get(...params) as { n: number }
+    db.prepare(`
+      SELECT COUNT(*) AS n FROM sessions s
+      LEFT JOIN contacts c ON c.username = s.username
+      ${where}
+    `).get(...params) as { n: number }
   ).n;
 }
 
@@ -476,22 +485,30 @@ export function listSessions(opts: { type?: string; sort?: string; limit?: numbe
     params.push(opts.type);
   }
   if (opts.q) {
-    conditions.push("s.display_name LIKE ?");
-    params.push(`%${opts.q}%`);
+    // Match against the effective display name (sessions row, falling back to
+    // the contacts row when sessions has a blank/wxid placeholder) AND the
+    // raw username, so users can search for either.
+    conditions.push(
+      "(s.display_name LIKE ? OR c.display_name LIKE ? OR s.username LIKE ?)",
+    );
+    const like = `%${opts.q}%`;
+    params.push(like, like, like);
   }
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
   // sort is `<key>` (uses each column's natural direction) or `<key>-asc` /
   // `<key>-desc` for an explicit override. Lets the column-header popover
   // toggle sort direction without inventing a separate `dir` URL param.
+  // The `name` sort intentionally targets the SELECT alias `display_name`
+  // (effective name) so the visible ordering matches what the user sees.
   const orderBy = (() => {
     switch (opts.sort) {
       case "messages":      return "ORDER BY message_count DESC";
       case "messages-asc":  return "ORDER BY message_count ASC";
       case "urls":          return "ORDER BY url_count DESC";
       case "urls-asc":      return "ORDER BY url_count ASC";
-      case "name":          return "ORDER BY s.display_name ASC";
-      case "name-desc":     return "ORDER BY s.display_name DESC";
+      case "name":          return "ORDER BY display_name ASC";
+      case "name-desc":     return "ORDER BY display_name DESC";
       case "recent-asc":    return "ORDER BY s.last_timestamp ASC NULLS LAST";
       case "recent":
       default:              return "ORDER BY s.last_timestamp DESC NULLS LAST";
@@ -500,16 +517,30 @@ export function listSessions(opts: { type?: string; sort?: string; limit?: numbe
 
   params.push(opts.limit ?? 100);
 
+  // Display name fallback chain:
+  //   1. sessions.display_name, when it's non-empty and not the raw username.
+  //   2. contacts.display_name (populated by `wx contacts`), when present.
+  //   3. sessions.username (wxid / chatroom handle) — last-resort.
+  // This lets the friend's already-indexed DB render real names without
+  // re-running quick index, in case `wx sessions --json` returned blank
+  // `chat` fields but `wx contacts --json` had names.
   return db.prepare(`
     WITH url_counts AS (
       SELECT chat_username, COUNT(*) AS n FROM urls_dedup WHERE chat_username IS NOT NULL GROUP BY chat_username
     )
     SELECT
-      s.username, s.display_name, s.chat_type, s.is_group, s.last_timestamp, s.unread, s.archived,
+      s.username,
+      COALESCE(
+        NULLIF(NULLIF(s.display_name, ''), s.username),
+        NULLIF(c.display_name, ''),
+        s.username
+      ) AS display_name,
+      s.chat_type, s.is_group, s.last_timestamp, s.unread, s.archived,
       s.last_history_error,
       COALESCE(s.message_count, 0) AS message_count,
       COALESCE((SELECT n FROM url_counts WHERE chat_username = s.username), 0) AS url_count
     FROM sessions s
+    LEFT JOIN contacts c ON c.username = s.username
     ${where}
     ${orderBy}
     LIMIT ?

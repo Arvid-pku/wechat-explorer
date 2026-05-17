@@ -141,7 +141,7 @@ export default async function ContactsPage({
               <>
                 {locale === "zh" ? (
                   <>
-                    {tr("contacts.showingOf").replace("{n}", "")}
+                    {"显示 "}
                     <span className="tabular-nums">{rows.length.toLocaleString()}</span>
                     {" / 共 "}
                     <span className="tabular-nums">{totalMatching.toLocaleString()}</span>

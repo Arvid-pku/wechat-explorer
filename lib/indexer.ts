@@ -82,9 +82,16 @@ export async function indexSessions(onProgress: ProgressCb = () => {}) {
   const tx = db.transaction((rows: RawSession[]) => {
     for (const s of rows) {
       const ct = classifyChatType(s.chat_type, s.is_group);
+      // `s.chat ?? s.username` only falls back on null/undefined; some wx-cli
+      // versions return chat="" for sessions whose nickname couldn't be
+      // resolved, which then propagates as a blank display_name and the
+      // contacts UI degrades to wxid handles. Treat empty/whitespace as
+      // missing so we at least store the username instead — and the contacts-
+      // table backfill below has a chance to fill in a real name.
+      const chat = (s.chat ?? "").trim();
       upsert.run(
         s.username,
-        s.chat ?? s.username,
+        chat || s.username,
         ct,
         s.is_group ? 1 : 0,
         s.timestamp ?? null,
@@ -112,11 +119,50 @@ export async function indexContacts(onProgress: ProgressCb = () => {}) {
     ON CONFLICT(username) DO UPDATE SET display_name=excluded.display_name
   `);
   const tx = db.transaction((rows: typeof contacts) => {
-    for (const c of rows) upsert.run(c.username, c.display ?? null);
+    for (const c of rows) {
+      // Normalize blank/whitespace-only displays to null so query-time
+      // COALESCE fallbacks work correctly.
+      const display = (c.display ?? "").trim();
+      upsert.run(c.username, display || null);
+    }
   });
   tx(contacts);
-  onProgress({ stage: "contacts:done", current: contacts.length, total: contacts.length });
+  const fix = backfillSessionDisplayNamesFromContacts();
+  onProgress({
+    stage: "contacts:done",
+    current: contacts.length,
+    total: contacts.length,
+    detail: fix > 0 ? `backfilled ${fix} session names` : undefined,
+  });
   return contacts.length;
+}
+
+/**
+ * Repair session display names that are blank, NULL, or equal to the username
+ * (i.e. raw wxid / chatroom handles) by copying from the `contacts` table.
+ * Some wx-cli versions return `chat=""` in `wx sessions` for sessions whose
+ * nickname didn't resolve; without this repair the contacts UI degrades to
+ * wxid handles even after deep-indexing, because deep-index never re-runs
+ * `indexSessions`. Safe to call after either quick or deep index — only
+ * touches rows where a strictly better candidate exists in `contacts`.
+ */
+export function backfillSessionDisplayNamesFromContacts(): number {
+  const db = getDb();
+  const res = db.prepare(`
+    UPDATE sessions
+    SET display_name = (
+      SELECT c.display_name FROM contacts c WHERE c.username = sessions.username
+    )
+    WHERE (display_name IS NULL OR display_name = '' OR display_name = username)
+      AND EXISTS (
+        SELECT 1 FROM contacts c
+        WHERE c.username = sessions.username
+          AND c.display_name IS NOT NULL
+          AND c.display_name <> ''
+          AND c.display_name <> sessions.username
+      )
+  `).run();
+  return res.changes;
 }
 
 export async function indexLinksBulk(onProgress: ProgressCb = () => {}) {
@@ -372,6 +418,10 @@ export async function runDeepIndex(opts: IndexDeepOptions = {}, onProgress: Prog
     stage: "backfill:done",
     detail: `${backfill.messagesUpdated} messages + ${backfill.urlsUpdated} urls linked`,
   });
+  const nameFix = backfillSessionDisplayNamesFromContacts();
+  if (nameFix > 0) {
+    onProgress({ stage: "names:backfilled", detail: `${nameFix} sessions` });
+  }
   onProgress({ stage: "rollups:start" });
   const rollup = refreshDailyCounts();
   onProgress({ stage: "rollups:done", detail: `${rollup.days} days` });
