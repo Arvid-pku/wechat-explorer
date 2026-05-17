@@ -1,5 +1,7 @@
 import { Suspense } from "react";
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { detectOnboardingState } from "@/lib/onboarding";
 import { getOverview } from "@/lib/queries";
 import { getRecapYears } from "@/lib/recap";
 import { getSurprises } from "@/lib/surprises";
@@ -31,6 +33,11 @@ function fmtNum(n: number) {
 }
 
 export default async function Page() {
+  // First-time check: if wx-cli isn't installed/initialised, the dashboard
+  // would just render zeros. Bounce to the guided wizard instead.
+  const onb = detectOnboardingState();
+  if (onb.nextStep !== null) redirect("/onboarding");
+
   const locale = await getServerLocale();
   const tr = (k: TKey) => t(k, locale);
   const o = getOverview();

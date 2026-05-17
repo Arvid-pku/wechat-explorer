@@ -297,6 +297,70 @@ const DICT = {
     en: "Run sudo wx init",
     zh: "执行 sudo wx init",
   },
+  // Wizard-style onboarding (/onboarding page)
+  "onboarding.eyebrow": { en: "First-time setup", zh: "首次设置" },
+  "onboarding.desc": {
+    en: "WeChat Explorer needs five things in place before it can read your local WeChat history. Each step below either runs itself with one click, or opens the page you need.",
+    zh: "在读取你本地的微信记录之前，WeChat Explorer 需要先完成下面五件事。每一步要么一键自动执行，要么会打开对应的资源。",
+  },
+  "onboarding.runIt": { en: "Run it", zh: "一键执行" },
+  "onboarding.running": { en: "Running…", zh: "执行中…" },
+  "onboarding.openLink": { en: "Open link", zh: "打开链接" },
+  "onboarding.userCancelled": {
+    en: "Cancelled (password dialog dismissed).",
+    zh: "已取消（关闭了密码弹窗）。",
+  },
+  "onboarding.exited": { en: "Exited with code", zh: "退出码" },
+  "onboarding.allDoneTitle": { en: "All set — ready to explore", zh: "全部就绪 —— 可以开始探索了" },
+  "onboarding.allDoneBody": {
+    en: "Every prerequisite checks green and your index has data. Open the dashboard whenever you're ready.",
+    zh: "所有依赖都已就位，索引也有数据了。随时打开主面板开始浏览。",
+  },
+  "onboarding.openApp": { en: "Open dashboard", zh: "打开主面板" },
+  "onboarding.firstIndexTitle": { en: "Build your first index", zh: "建立第一个索引" },
+  "onboarding.firstIndexBody": {
+    en: "Quick mode pulls sessions, contacts, and shared links (~20 s on a typical corpus). You can run deep history afterwards from Settings.",
+    zh: "快速模式会拉取会话、联系人和分享的链接（通常约 20 秒）。之后可以到 Settings 跑深度索引来拉取完整历史。",
+  },
+  "onboarding.runQuickIndex": { en: "Run quick index", zh: "运行快速索引" },
+  "onboarding.indexRunning": { en: "Indexing…", zh: "正在索引…" },
+
+  "onboarding.step.brewTitle": { en: "Install Homebrew", zh: "安装 Homebrew" },
+  "onboarding.step.brewBody": {
+    en: "Homebrew is the macOS package manager we'll use to install wx-cli. Skip if you already have it.",
+    zh: "Homebrew 是 macOS 上的包管理器，下一步会用它安装 wx-cli。已经装过的话可以跳过。",
+  },
+  "onboarding.step.brewLink": { en: "brew.sh", zh: "brew.sh" },
+  "onboarding.step.wxCliTitle": { en: "Install wx-cli", zh: "安装 wx-cli" },
+  "onboarding.step.wxCliBody": {
+    en: "wx-cli is the bridge that reads WeChat's local databases. We run brew install in the background.",
+    zh: "wx-cli 是读取微信本地数据库的桥梁。我们会在后台运行 brew install。",
+  },
+  "onboarding.step.wechatAppTitle": { en: "Install WeChat for Mac", zh: "安装 macOS 版微信" },
+  "onboarding.step.wechatAppBody": {
+    en: "We need /Applications/WeChat.app present (App Store download is fine). Log in once before continuing.",
+    zh: "需要在 /Applications/ 下安装 WeChat.app（App Store 版本可以）。安装后先登录一次。",
+  },
+  "onboarding.step.wechatAppLink": { en: "Download WeChat", zh: "下载微信" },
+  "onboarding.step.resignTitle": { en: "Re-sign WeChat", zh: "重新签名 WeChat" },
+  "onboarding.step.resignBody": {
+    en: "wx-cli needs to read WeChat's memory to extract DB keys. Re-signing with your own ad-hoc signature unlocks that.",
+    zh: "wx-cli 需要读取 WeChat 进程内存来提取数据库密钥。用你自己的 ad-hoc 签名重签 WeChat 才能放行这一步。",
+  },
+  "onboarding.step.resignCaveat": {
+    en: "Quit WeChat first. macOS will ask for your password — that's the system, not us.",
+    zh: "请先退出 WeChat。系统会弹出输入管理员密码的窗口，那是 macOS 自己的弹窗。",
+  },
+  "onboarding.step.initTitle": { en: "Extract WeChat keys", zh: "提取微信密钥" },
+  "onboarding.step.initBody": {
+    en: "One last sudo step — runs `wx init`, which dumps the decryption keys to ~/.wx-cli/.",
+    zh: "最后一个需要 sudo 的步骤 —— 执行 wx init，把解密密钥写入 ~/.wx-cli/。",
+  },
+  "onboarding.step.initCaveat": {
+    en: "Launch WeChat first and stay logged in. macOS will prompt for your password again.",
+    zh: "请先启动 WeChat 并保持登录状态。系统会再次提示输入管理员密码。",
+  },
+
   "onboarding.step3": {
     en: "Press Index from Settings",
     zh: "在 Settings 里点击 Index",
