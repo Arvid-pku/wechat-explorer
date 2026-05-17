@@ -1,0 +1,36 @@
+appId: com.wechat-explorer.app
+productName: WeChat Explorer
+copyright: ""
+
+# We deliberately don't enable asar — the Next.js standalone bundle includes a
+# native better-sqlite3 .node binary that needs to live on disk for dlopen to
+# work, and asar-unpack rules for nested node_modules are fragile. Skipping
+# asar costs us nothing meaningful for a self-distributed local-only app.
+asar: false
+
+directories:
+  output: release
+  buildResources: build
+
+# Only ship the compiled Electron main entry. electron-builder's filter
+# pipeline insists on stripping `node_modules/` from extraResources no matter
+# the filter expression, so the Next.js standalone tree is copied manually
+# by scripts/build-app.sh *after* electron-builder finishes (see the script).
+files:
+  - "!**/*"
+  - electron/dist/**/*
+  - package.json
+
+mac:
+  category: public.app-category.productivity
+  # `dir` produces an unpacked .app under release/mac/ — fastest for testing.
+  # Add `dmg` here for distribution: `[ "dir", "dmg" ]`.
+  target:
+    - dir
+  # No code signing for self-distribution. Users will need to allow the app
+  # in Settings → Privacy & Security → "Open Anyway" on first launch.
+  identity: null
+  # The hardened runtime is unnecessary without signing and tickles entitlement
+  # issues for a spawned-child-process model.
+  hardenedRuntime: false
+  gatekeeperAssess: false

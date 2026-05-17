@@ -47,3 +47,8 @@ progress.md
 
 # Playwright MCP transient artifacts (per-session snapshot YAMLs + console logs)
 .playwright-mcp/
+
+# Electron build outputs
+/electron/dist/
+/dist/
+/release/

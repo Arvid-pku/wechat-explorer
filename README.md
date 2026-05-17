@@ -45,6 +45,29 @@ git clone <your-fork> wechat-explorer && cd wechat-explorer
 
 That runs platform / Node / wx-cli checks, picks `bun` or `npm` based on what's installed, rebuilds the native `better-sqlite3` addon, runs a quick index if `wx-cli` is initialised, and starts the dev server. Open <http://localhost:3719>. Re-running the script is safe — every step is idempotent.
 
+### Or: build a standalone `WeChat Explorer.app`
+
+If you'd rather double-click an app icon than keep a terminal open, build the native macOS bundle:
+
+```bash
+npm run build:app          # → release/mac-arm64/WeChat Explorer.app  (~300 MB)
+npm run build:app:dmg      # … also produces a distributable .dmg
+```
+
+The bundle includes Electron + the Next.js production server + a `better-sqlite3` binary recompiled against Electron's Node ABI. Launch it like any other app:
+
+```bash
+open "release/mac-arm64/WeChat Explorer.app"
+# or drag into /Applications and double-click
+```
+
+A few notes:
+
+- **First launch on a different Mac**: the bundle is unsigned, so macOS Gatekeeper will block it. Right-click → Open, or allow it under **Settings → Privacy & Security**. (Don't curl-pipe-bash someone else's `.app`.)
+- **`wx-cli` is still required** — the bundle doesn't ship it, since it's macOS-only and needs `sudo`. Same prerequisite as the web version (`brew install jackwener/tap/wx-cli && sudo wx init`).
+- **Data lives where you'd expect**: `~/.wechat-explorer/index.db`. Override with `WE_DATA_DIR=<path>` before launch.
+- For UI iteration without re-bundling, `npm run app:dev` opens the Electron window pointed at your already-running `npm run dev`.
+
 Other flags:
 
 ```bash
