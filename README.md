@@ -47,26 +47,34 @@ That runs platform / Node / wx-cli checks, picks `bun` or `npm` based on what's 
 
 ### Or: build a standalone `WeChat Explorer.app`
 
-If you'd rather double-click an app icon than keep a terminal open, build the native macOS bundle:
+If you'd rather double-click an app icon than keep a terminal open, build the universal macOS bundle:
 
 ```bash
-npm run build:app          # → release/mac-arm64/WeChat Explorer.app  (~300 MB)
+npm run build:app          # → release/mac-universal/WeChat Explorer.app  (~500 MB)
 npm run build:app:dmg      # … also produces a distributable .dmg
 ```
 
-The bundle includes Electron + the Next.js production server + a `better-sqlite3` binary recompiled against Electron's Node ABI. Launch it like any other app:
+The bundle:
+
+- **Universal binary** — runs on both Apple Silicon and Intel Macs. `better-sqlite3`'s native binding is fat-merged via `lipo` so both architectures load it natively.
+- **Custom icon** — the chat-bubble-with-bar-chart squircle (see `build/icon.svg`).
+- **Includes a guided first-run wizard** — opens to `/onboarding` if `wx-cli` isn't set up, with one-click buttons for `brew install`, the WeChat re-sign step, and `sudo wx init`. The sudo steps trigger the standard macOS password dialog via `osascript`; no terminal needed.
+- **Bundles Electron 38 + the Next.js production server**. Locked to `127.0.0.1`; external links open in your default browser.
+
+Launch like any other app:
 
 ```bash
-open "release/mac-arm64/WeChat Explorer.app"
+open "release/mac-universal/WeChat Explorer.app"
 # or drag into /Applications and double-click
 ```
 
-A few notes:
+Caveats:
 
-- **First launch on a different Mac**: the bundle is unsigned, so macOS Gatekeeper will block it. Right-click → Open, or allow it under **Settings → Privacy & Security**. (Don't curl-pipe-bash someone else's `.app`.)
-- **`wx-cli` is still required** — the bundle doesn't ship it, since it's macOS-only and needs `sudo`. Same prerequisite as the web version (`brew install jackwener/tap/wx-cli && sudo wx init`).
-- **Data lives where you'd expect**: `~/.wechat-explorer/index.db`. Override with `WE_DATA_DIR=<path>` before launch.
-- For UI iteration without re-bundling, `npm run app:dev` opens the Electron window pointed at your already-running `npm run dev`.
+- **Unsigned bundle** — macOS Gatekeeper blocks unknown developers. First launch: right-click → Open, or allow under **Settings → Privacy & Security → "Open Anyway"**. (Trust your own builds; don't curl-pipe-bash someone else's `.app`.)
+- **`wx-cli` is still the prerequisite** — it can't be bundled (needs `sudo` to attach to WeChat's process), but the in-app wizard now installs and initialises it for you. Same end state as `brew install jackwener/tap/wx-cli && sudo wx init`, but driven from buttons.
+- **Data path is the same as the web version**: `~/.wechat-explorer/index.db`. Override with `WE_DATA_DIR=<path>` set in the environment before launching.
+- For UI iteration without re-bundling, `npm run app:dev` opens the Electron window pointed at an already-running `npm run dev`.
+- To regenerate the icon: edit `build/icon.svg`, then `bash scripts/build-icon.sh` (the build script auto-runs this when the SVG is newer than the `.icns`).
 
 Other flags:
 
