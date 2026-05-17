@@ -46,6 +46,19 @@ export interface MeTopChat {
 
 export type MeAggregation = "week" | "month" | "year";
 
+/** Sort + series perspective for the "top chats" panels. */
+export type MeTopMode = "sent" | "received";
+/** Trailing window for the top-chats panel. `all` = lifetime. */
+export type MeTopRange = "all" | "1y" | "6m" | "3m";
+export type MeTopN = 3 | 5 | 10;
+
+const RANGE_DAYS: Record<MeTopRange, number | null> = {
+  all: null,
+  "1y": 365,
+  "6m": 180,
+  "3m": 90,
+};
+
 export interface MeMonth {
   ym: string;
   mine: number;
@@ -134,10 +147,19 @@ export interface MeStats {
   msgTypeBreakdown: { msg_type: string; n: number }[];
   topPrivate: MeTopChat[];
   topGroups: MeTopChat[];
-  /** Per-bucket "you sent" series for the top-5 private chats. */
+  /** Per-bucket "you sent" series for the top private chats. */
   topPrivateSeries: MeTopSeries;
-  /** Same shape for top-5 groups. */
+  /** Same shape for top groups. */
   topGroupSeries: MeTopSeries;
+  /** Chats where the OTHER side messages you the most (sorted by theirs DESC). */
+  topPrivateReceived: MeTopChat[];
+  topGroupsReceived: MeTopChat[];
+  /** Series of THEIR messages over time for those top-received chats. */
+  topPrivateReceivedSeries: MeTopSeries;
+  topGroupReceivedSeries: MeTopSeries;
+  /** Active filters that produced the top-chats fields. Echoed so the UI can
+   *  render its toolbar in the right state. */
+  topFilters: { topN: MeTopN; range: MeTopRange };
   style: MeStyle;
   topics: ScoredWord[];
   topDomains: { domain_group: string; n: number }[];
@@ -180,12 +202,21 @@ const STYLE_SAMPLE_LIMIT = 5000;
  * `agg` controls how the time-series chart on /me is bucketed. Monthly is the
  * default; week / year are user-toggleable via URL param.
  */
-export function getMeStats(opts: { agg?: MeAggregation } = {}): MeStats {
+export function getMeStats(
+  opts: { agg?: MeAggregation; topN?: MeTopN; topRange?: MeTopRange } = {},
+): MeStats {
   const agg: MeAggregation = opts.agg ?? "month";
-  return getCachedJSON(`me-stats:agg=${agg}`, () => computeMeStats(agg));
+  const topN: MeTopN = opts.topN ?? 5;
+  const topRange: MeTopRange = opts.topRange ?? "all";
+  const key = `me-stats:agg=${agg}:n=${topN}:r=${topRange}`;
+  return getCachedJSON(key, () => computeMeStats(agg, topN, topRange));
 }
 
-function computeMeStats(agg: MeAggregation): MeStats {
+function computeMeStats(
+  agg: MeAggregation,
+  topN: MeTopN,
+  topRange: MeTopRange,
+): MeStats {
   ensureDailyCountsFresh();
   const db = getDb();
   const me = getMeHandles();
@@ -386,73 +417,129 @@ function computeMeStats(agg: MeAggregation): MeStats {
     )
     .all(...me) as { msg_type: string; n: number }[];
 
-  // ── Top chats by my output ──────────────────────────────────────────
-  // Pull a generous shortlist of sessions where my_msg_count is non-zero,
-  // join with message_count for context. Use the pre-aggregated columns.
-  const topPrivate = db
-    .prepare(
-      `SELECT s.username, s.display_name, s.chat_type, s.my_msg_count AS my_msgs,
-              s.message_count AS total, s.member_count, s.last_timestamp AS last_ts
-       FROM sessions s
-       WHERE s.archived = 0 AND s.chat_type = 'private' AND s.my_msg_count > 0
-       ORDER BY s.my_msg_count DESC
-       LIMIT 10`,
-    )
-    .all() as {
-    username: string;
-    display_name: string;
-    chat_type: string;
-    my_msgs: number;
-    total: number;
-    member_count: number | null;
-    last_ts: number | null;
-  }[];
-  const topGroups = db
-    .prepare(
-      `SELECT s.username, s.display_name, s.chat_type, s.my_msg_count AS my_msgs,
-              s.message_count AS total, s.member_count, s.last_timestamp AS last_ts
-       FROM sessions s
-       WHERE s.archived = 0 AND s.chat_type = 'group' AND s.my_msg_count > 0
-       ORDER BY s.my_msg_count DESC
-       LIMIT 10`,
-    )
-    .all() as typeof topPrivate;
-  const enrich = (rows: typeof topPrivate): MeTopChat[] =>
-    rows.map((r) => ({
-      ...r,
-      theirs: Math.max(0, r.total - r.my_msgs),
-    }));
+  // ── Top chats: range + perspective aware ───────────────────────────
+  // Range "all" can lean on the pre-aggregated `sessions.my_msg_count` +
+  // `message_count` columns (cheap; covers the entire indexed history).
+  // Bounded ranges need a fresh aggregate over the messages table within
+  // the window — the lifetime totals don't tell us who's been active
+  // recently. Both paths return the same shape.
+  const rangeDays = RANGE_DAYS[topRange];
+  const rangeCutoff = rangeDays ? Math.floor(Date.now() / 1000) - rangeDays * 86400 : null;
 
-  // Per-bucket series for the top-5 of each tab — feeds the multi-line chart.
-  // One SQL per tab: pull `chat_username + bucket + COUNT(*)` filtered to me
-  // and the top-5 usernames, then pivot in JS so each chart datum holds
-  // one value per chat (for Recharts' multi-Line layout).
-  function buildTopSeries(top: typeof topPrivate): MeTopSeries {
-    const chats = top.slice(0, 5).map((r) => ({
+  function pickTopChats(
+    chatType: "private" | "group",
+    mode: MeTopMode,
+    limit: number,
+  ): MeTopChat[] {
+    if (rangeCutoff === null) {
+      // Lifetime path — read the pre-aggregated session columns. Cheap.
+      const orderCol = mode === "sent" ? "my_msgs" : "theirs_count";
+      const rows = db
+        .prepare(
+          `SELECT s.username, s.display_name, s.chat_type,
+                  s.my_msg_count AS my_msgs,
+                  s.message_count AS total,
+                  MAX(0, s.message_count - s.my_msg_count) AS theirs_count,
+                  s.member_count, s.last_timestamp AS last_ts
+           FROM sessions s
+           WHERE s.archived = 0
+             AND s.chat_type = ?
+             AND ${mode === "sent" ? "s.my_msg_count > 0" : "(s.message_count - s.my_msg_count) > 0"}
+           ORDER BY ${orderCol} DESC
+           LIMIT ?`,
+        )
+        .all(chatType, limit) as {
+        username: string;
+        display_name: string;
+        chat_type: string;
+        my_msgs: number;
+        total: number;
+        theirs_count: number;
+        member_count: number | null;
+        last_ts: number | null;
+      }[];
+      return rows.map((r) => ({
+        username: r.username,
+        display_name: r.display_name,
+        chat_type: r.chat_type,
+        my_msgs: r.my_msgs,
+        total: r.total,
+        theirs: r.theirs_count,
+        member_count: r.member_count,
+        last_ts: r.last_ts,
+      }));
+    }
+    // Bounded range — sum from the messages table within the window. Uses
+    // the (chat_username, timestamp DESC) covering index.
+    const rows = db
+      .prepare(
+        `SELECT s.username, s.display_name, s.chat_type, s.member_count,
+                s.last_timestamp AS last_ts,
+                SUM(CASE WHEN m.sender ${meIn} THEN 1 ELSE 0 END) AS my_msgs,
+                SUM(CASE WHEN m.sender NOT ${meIn} AND m.sender != '' THEN 1 ELSE 0 END)
+                  + SUM(CASE WHEN m.sender = '' THEN 1 ELSE 0 END) AS theirs_count,
+                COUNT(*) AS total
+         FROM messages m
+         JOIN sessions s ON s.username = m.chat_username
+         WHERE s.archived = 0
+           AND s.chat_type = ?
+           AND m.timestamp >= ?
+         GROUP BY s.username
+         HAVING ${mode === "sent" ? "my_msgs > 0" : "theirs_count > 0"}
+         ORDER BY ${mode === "sent" ? "my_msgs" : "theirs_count"} DESC
+         LIMIT ?`,
+      )
+      .all(...me, ...me, chatType, rangeCutoff, limit) as {
+      username: string;
+      display_name: string;
+      chat_type: string;
+      member_count: number | null;
+      last_ts: number | null;
+      my_msgs: number;
+      theirs_count: number;
+      total: number;
+    }[];
+    return rows.map((r) => ({
       username: r.username,
       display_name: r.display_name,
+      chat_type: r.chat_type,
       my_msgs: r.my_msgs,
+      total: r.total,
+      theirs: r.theirs_count,
+      member_count: r.member_count,
+      last_ts: r.last_ts,
     }));
+  }
+
+  // Pivot helper — pulls per-bucket counts for a fixed set of chats + a
+  // sender filter. Used by both "sent" and "received" series.
+  function buildSeries(
+    chats: MeTopChat[],
+    mode: MeTopMode,
+  ): MeTopSeries {
     if (chats.length === 0) return { chats: [], points: [] };
     const chatPlaceholders = chats.map(() => "?").join(",");
+    const senderClause = mode === "sent" ? `m.sender ${meIn}` : `m.sender NOT ${meIn}`;
+    const rangeClause = rangeCutoff !== null ? "AND m.timestamp >= ?" : "";
+    const rangeParam = rangeCutoff !== null ? [rangeCutoff] : [];
     const rawRows = db
       .prepare(
-        `SELECT chat_username,
-                strftime('${aggPattern[agg]}', timestamp, 'unixepoch', 'localtime') AS label,
+        `SELECT m.chat_username,
+                strftime('${aggPattern[agg]}', m.timestamp, 'unixepoch', 'localtime') AS label,
                 COUNT(*) AS n
-         FROM messages
-         WHERE sender ${meIn}
-           AND chat_username IN (${chatPlaceholders})
-         GROUP BY chat_username, label
+         FROM messages m
+         WHERE ${senderClause}
+           AND m.chat_username IN (${chatPlaceholders})
+           ${rangeClause}
+         GROUP BY m.chat_username, label
          ORDER BY label`,
       )
-      .all(...me, ...chats.map((c) => c.username)) as {
-      chat_username: string;
-      label: string;
-      n: number;
-    }[];
+      .all(
+        ...me,
+        ...chats.map((c) => c.username),
+        ...rangeParam,
+      ) as { chat_username: string; label: string; n: number }[];
 
-    // Pivot: build per-label points with a key for each chat username.
     const byLabel = new Map<string, MeTopSeriesPoint>();
     for (const r of rawRows) {
       let pt = byLabel.get(r.label);
@@ -463,16 +550,36 @@ function computeMeStats(agg: MeAggregation): MeStats {
       }
       pt[r.chat_username] = r.n;
     }
+    const seriesChats = chats.map((r) => ({
+      username: r.username,
+      display_name: r.display_name,
+      my_msgs: mode === "sent" ? r.my_msgs : r.theirs,
+    }));
     return {
-      chats,
+      chats: seriesChats,
       points: Array.from(byLabel.values()).sort((a, b) =>
         String(a.label).localeCompare(String(b.label)),
       ),
     };
   }
 
-  const topPrivateSeries = buildTopSeries(topPrivate);
-  const topGroupSeries = buildTopSeries(topGroups);
+  // Pull at most 10 candidates per panel (covers topN=10 with one query).
+  const shortlistLimit = Math.max(10, topN);
+  const topPrivate = pickTopChats("private", "sent", shortlistLimit);
+  const topPrivateReceived = pickTopChats("private", "received", shortlistLimit);
+  const topGroups = pickTopChats("group", "sent", shortlistLimit);
+  const topGroupsReceived = pickTopChats("group", "received", shortlistLimit);
+
+  const topPrivateSeries = buildSeries(topPrivate.slice(0, topN), "sent");
+  const topPrivateReceivedSeries = buildSeries(
+    topPrivateReceived.slice(0, topN),
+    "received",
+  );
+  const topGroupSeries = buildSeries(topGroups.slice(0, topN), "sent");
+  const topGroupReceivedSeries = buildSeries(
+    topGroupsReceived.slice(0, topN),
+    "received",
+  );
 
   // ── One-sided ───────────────────────────────────────────────────────
   // Chats where I sent >= 5 but barely anyone replied. Lifetime, not windowed.
@@ -628,10 +735,15 @@ function computeMeStats(agg: MeAggregation): MeStats {
     hourly,
     dow,
     msgTypeBreakdown,
-    topPrivate: enrich(topPrivate),
-    topGroups: enrich(topGroups),
+    topPrivate: topPrivate.slice(0, topN),
+    topGroups: topGroups.slice(0, topN),
     topPrivateSeries,
     topGroupSeries,
+    topPrivateReceived: topPrivateReceived.slice(0, topN),
+    topGroupsReceived: topGroupsReceived.slice(0, topN),
+    topPrivateReceivedSeries,
+    topGroupReceivedSeries,
+    topFilters: { topN, range: topRange },
     style,
     topics,
     topDomains,
@@ -683,6 +795,11 @@ function emptyStats(meHandles: string[], agg: MeAggregation): MeStats {
     topGroups: [],
     topPrivateSeries: { chats: [], points: [] },
     topGroupSeries: { chats: [], points: [] },
+    topPrivateReceived: [],
+    topGroupsReceived: [],
+    topPrivateReceivedSeries: { chats: [], points: [] },
+    topGroupReceivedSeries: { chats: [], points: [] },
+    topFilters: { topN: 5, range: "all" },
     style: {
       sampleSize: 0,
       avgChars: 0,

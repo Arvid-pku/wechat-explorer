@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getMeStats, type MeAggregation } from "@/lib/me-stats";
+import { getMeStats, type MeAggregation, type MeTopN, type MeTopRange } from "@/lib/me-stats";
 import {
   Card,
   CardContent,
@@ -48,11 +48,26 @@ function pct(p: number) {
 }
 
 const VALID_AGGS: MeAggregation[] = ["week", "month", "year"];
+const VALID_TOP_NS: MeTopN[] = [3, 5, 10];
+const VALID_TOP_RANGES: MeTopRange[] = ["all", "1y", "6m", "3m"];
+
+function parseTopN(v: string | undefined): MeTopN {
+  const n = Number(v);
+  return VALID_TOP_NS.includes(n as MeTopN) ? (n as MeTopN) : 5;
+}
+function parseTopRange(v: string | undefined): MeTopRange {
+  return VALID_TOP_RANGES.includes(v as MeTopRange) ? (v as MeTopRange) : "all";
+}
 
 export default async function MePage({
   searchParams,
 }: {
-  searchParams: Promise<{ agg?: string; split?: string }>;
+  searchParams: Promise<{
+    agg?: string;
+    split?: string;
+    topN?: string;
+    topRange?: string;
+  }>;
 }) {
   const sp = await searchParams;
   const agg: MeAggregation =
@@ -64,9 +79,11 @@ export default async function MePage({
   // is always computed in me-stats; this param only toggles which series the
   // chart renders.
   const splitTheirs = sp.split === "1";
+  const topN = parseTopN(sp.topN);
+  const topRange = parseTopRange(sp.topRange);
   const locale = await getServerLocale();
   const tr = (k: TKey) => t(k, locale);
-  const s = getMeStats({ agg });
+  const s = getMeStats({ agg, topN, topRange });
 
   if (!s.hasData) {
     return (
@@ -230,8 +247,20 @@ export default async function MePage({
                 </CardDescription>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
-                <SplitToggle current={splitTheirs} agg={s.agg} locale={locale} />
-                <AggSwitch current={s.agg} split={splitTheirs} locale={locale} />
+                <SplitToggle
+                  current={splitTheirs}
+                  agg={s.agg}
+                  topN={topN}
+                  topRange={topRange}
+                  locale={locale}
+                />
+                <AggSwitch
+                  current={s.agg}
+                  split={splitTheirs}
+                  topN={topN}
+                  topRange={topRange}
+                  locale={locale}
+                />
               </div>
             </div>
           </CardHeader>
@@ -341,61 +370,85 @@ export default async function MePage({
         </CardContent>
       </Card>
 
-      {/* Top chats over time */}
-      <section className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Who you message most (1:1)</CardTitle>
-            <CardDescription>
-              Top 5 private chats — your sends per{" "}
-              {s.agg === "week" ? "week" : s.agg === "year" ? "year" : "month"}.
-              Switch the aggregation above. Full top-10 listed below.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {s.topPrivateSeries.points.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No private chats yet — try a deep index.
-              </p>
-            ) : (
-              <MultiLine
-                data={s.topPrivateSeries.points}
-                series={s.topPrivateSeries.chats.map((c) => ({
-                  key: c.username,
-                  label: c.display_name || c.username,
-                }))}
-              />
-            )}
-            {s.topPrivate.length > 0 && <CompactRanking rows={s.topPrivate} />}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Groups you contribute to most</CardTitle>
-            <CardDescription>
-              Top 5 groups — your sends per{" "}
-              {s.agg === "week" ? "week" : s.agg === "year" ? "year" : "month"}.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {s.topGroupSeries.points.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No groups indexed for you yet.
-              </p>
-            ) : (
-              <MultiLine
-                data={s.topGroupSeries.points}
-                series={s.topGroupSeries.chats.map((c) => ({
-                  key: c.username,
-                  label: c.display_name || c.username,
-                }))}
-              />
-            )}
-            {s.topGroups.length > 0 && (
-              <CompactRanking rows={s.topGroups} showMembers />
-            )}
-          </CardContent>
-        </Card>
+      {/* Top chats over time — 2x2 grid: (sent / received) × (private / groups) */}
+      <section className="space-y-4">
+        <div className="flex items-end justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="text-xl font-semibold tracking-tight">
+              {locale === "zh" ? "你的高频会话" : "Your top chats over time"}
+            </h2>
+            <p className="text-sm text-muted-foreground mt-1">
+              {locale === "zh"
+                ? `每${s.agg === "week" ? "周" : s.agg === "year" ? "年" : "月"}对比，左列是你发出的，右列是对方/群里发给你的。`
+                : `Per ${s.agg === "week" ? "week" : s.agg === "year" ? "year" : "month"}, with what you send on the left and what they send you on the right.`}
+            </p>
+          </div>
+          <TopChatsToolbar
+            agg={agg}
+            split={splitTheirs}
+            topN={s.topFilters.topN}
+            topRange={s.topFilters.range}
+            locale={locale}
+          />
+        </div>
+        <section className="grid gap-6 lg:grid-cols-2">
+          <TopChatsCard
+            title={locale === "zh" ? "你给谁发最多（私聊）" : "Who you message most (1:1)"}
+            desc={
+              locale === "zh"
+                ? `每${s.agg === "week" ? "周" : s.agg === "year" ? "年" : "月"}你发出的消息，按总量排序。`
+                : `Your sends per ${s.agg === "week" ? "week" : s.agg === "year" ? "year" : "month"}, sorted by total you sent.`
+            }
+            empty={locale === "zh" ? "暂无私聊数据，跑一次 Deep index。" : "No private chats yet — try a deep index."}
+            chats={s.topPrivate}
+            series={s.topPrivateSeries}
+            metric="my_msgs"
+          />
+          <TopChatsCard
+            title={locale === "zh" ? "谁给你发最多（私聊）" : "Who messages you most (1:1)"}
+            desc={
+              locale === "zh"
+                ? `每${s.agg === "week" ? "周" : s.agg === "year" ? "年" : "月"}对方发给你的消息，按总量排序。`
+                : `Their messages to you per ${s.agg === "week" ? "week" : s.agg === "year" ? "year" : "month"}, sorted by their total.`
+            }
+            empty={
+              locale === "zh"
+                ? "暂无对方消息数据，跑一次 Deep index。"
+                : "No incoming private messages yet — try a deep index."
+            }
+            chats={s.topPrivateReceived}
+            series={s.topPrivateReceivedSeries}
+            metric="theirs"
+          />
+          <TopChatsCard
+            title={locale === "zh" ? "你贡献最多的群" : "Groups you contribute to most"}
+            desc={
+              locale === "zh"
+                ? `每${s.agg === "week" ? "周" : s.agg === "year" ? "年" : "月"}你在群里的发言。`
+                : `Your sends per ${s.agg === "week" ? "week" : s.agg === "year" ? "year" : "month"}, sorted by total you sent.`
+            }
+            empty={locale === "zh" ? "暂无群聊数据。" : "No groups indexed for you yet."}
+            chats={s.topGroups}
+            series={s.topGroupSeries}
+            metric="my_msgs"
+            showMembers
+          />
+          <TopChatsCard
+            title={locale === "zh" ? "群里给你发最多的" : "Groups that message you most"}
+            desc={
+              locale === "zh"
+                ? `每${s.agg === "week" ? "周" : s.agg === "year" ? "年" : "月"}群里其他人发的消息总量。`
+                : `Total messages other group members send per ${s.agg === "week" ? "week" : s.agg === "year" ? "year" : "month"}.`
+            }
+            empty={
+              locale === "zh" ? "暂无群消息数据。" : "No group messages indexed yet — try a deep index."
+            }
+            chats={s.topGroupsReceived}
+            series={s.topGroupReceivedSeries}
+            metric="theirs"
+            showMembers
+          />
+        </section>
       </section>
 
       {/* Reply latency */}
@@ -624,10 +677,17 @@ export default async function MePage({
   );
 }
 
-function meHref(agg: MeAggregation, split: boolean): string {
+function meHref(
+  agg: MeAggregation,
+  split: boolean,
+  topN: MeTopN = 5,
+  topRange: MeTopRange = "all",
+): string {
   const qs = new URLSearchParams();
   if (agg !== "month") qs.set("agg", agg);
   if (split) qs.set("split", "1");
+  if (topN !== 5) qs.set("topN", String(topN));
+  if (topRange !== "all") qs.set("topRange", topRange);
   const str = qs.toString();
   return str ? `/me?${str}` : "/me";
 }
@@ -635,10 +695,14 @@ function meHref(agg: MeAggregation, split: boolean): string {
 function AggSwitch({
   current,
   split,
+  topN,
+  topRange,
   locale,
 }: {
   current: MeAggregation;
   split: boolean;
+  topN: MeTopN;
+  topRange: MeTopRange;
   locale: "en" | "zh";
 }) {
   const tr = (k: TKey) => t(k, locale);
@@ -652,7 +716,7 @@ function AggSwitch({
       {opts.map((o) => (
         <Link
           key={o.key}
-          href={meHref(o.key, split)}
+          href={meHref(o.key, split, topN, topRange)}
           className={`rounded px-2.5 py-1 font-medium transition-colors ${
             current === o.key
               ? "bg-accent text-foreground"
@@ -669,10 +733,14 @@ function AggSwitch({
 function SplitToggle({
   current,
   agg,
+  topN,
+  topRange,
   locale,
 }: {
   current: boolean;
   agg: MeAggregation;
+  topN: MeTopN;
+  topRange: MeTopRange;
   locale: "en" | "zh";
 }) {
   const tr = (k: TKey) => t(k, locale);
@@ -695,7 +763,7 @@ function SplitToggle({
       {opts.map((o) => (
         <Link
           key={String(o.key)}
-          href={meHref(agg, o.key)}
+          href={meHref(agg, o.key, topN, topRange)}
           title={o.title}
           className={`rounded px-2.5 py-1 font-medium transition-colors ${
             current === o.key
@@ -821,6 +889,9 @@ function Metric({ label, value }: { label: React.ReactNode; value: string }) {
 function CompactRanking({
   rows,
   showMembers,
+  /** Which column to lead with — "my_msgs" or "theirs". Drives the big number
+   *  on each row; the muted slash-total stays the same either way. */
+  metric = "my_msgs",
 }: {
   rows: {
     username: string;
@@ -831,6 +902,7 @@ function CompactRanking({
     member_count: number | null;
   }[];
   showMembers?: boolean;
+  metric?: "my_msgs" | "theirs";
 }) {
   return (
     <details className="text-xs text-muted-foreground">
@@ -838,35 +910,183 @@ function CompactRanking({
         Show full top-{rows.length} ranking
       </summary>
       <ol className="mt-2 space-y-0.5">
-        {rows.map((r, i) => (
-          <li key={r.username}>
-            <Link
-              href={`/contacts/${encodeURIComponent(r.username)}`}
-              className="grid grid-cols-[1.5rem_1fr_auto] gap-2 items-center rounded px-1.5 py-1 hover:bg-accent/60"
-            >
-              <span className="tabular-nums">{i + 1}.</span>
-              <span className="truncate group-hover:text-primary text-foreground/80">
-                {r.display_name || r.username}
-              </span>
-              <span className="tabular-nums whitespace-nowrap">
-                {r.my_msgs.toLocaleString()}
-                {r.total > 0 && (
-                  <span className="text-muted-foreground/60">
-                    {" / "}
-                    {r.total.toLocaleString()}
-                  </span>
-                )}
-                {showMembers && r.member_count != null && (
-                  <span className="text-muted-foreground/60 ml-1">
-                    · {r.member_count}m
-                  </span>
-                )}
-              </span>
-            </Link>
-          </li>
-        ))}
+        {rows.map((r, i) => {
+          const headline = metric === "my_msgs" ? r.my_msgs : r.theirs;
+          return (
+            <li key={r.username}>
+              <Link
+                href={`/contacts/${encodeURIComponent(r.username)}`}
+                className="grid grid-cols-[1.5rem_1fr_auto] gap-2 items-center rounded px-1.5 py-1 hover:bg-accent/60"
+              >
+                <span className="tabular-nums">{i + 1}.</span>
+                <span className="truncate group-hover:text-primary text-foreground/80">
+                  {r.display_name || r.username}
+                </span>
+                <span className="tabular-nums whitespace-nowrap">
+                  {headline.toLocaleString()}
+                  {r.total > 0 && (
+                    <span className="text-muted-foreground/60">
+                      {" / "}
+                      {r.total.toLocaleString()}
+                    </span>
+                  )}
+                  {showMembers && r.member_count != null && (
+                    <span className="text-muted-foreground/60 ml-1">
+                      · {r.member_count}m
+                    </span>
+                  )}
+                </span>
+              </Link>
+            </li>
+          );
+        })}
       </ol>
     </details>
+  );
+}
+
+/**
+ * Top-chats card wrapper. Renders one MultiLine + a CompactRanking together,
+ * accepting either the sent or received series + metric so all four cards
+ * stay symmetric.
+ */
+function TopChatsCard({
+  title,
+  desc,
+  empty,
+  chats,
+  series,
+  metric,
+  showMembers,
+}: {
+  title: string;
+  desc: string;
+  empty: string;
+  chats: {
+    username: string;
+    display_name: string;
+    my_msgs: number;
+    total: number;
+    theirs: number;
+    member_count: number | null;
+    last_ts: number | null;
+  }[];
+  series: { chats: { username: string; display_name: string }[]; points: Record<string, number | string>[] };
+  metric: "my_msgs" | "theirs";
+  showMembers?: boolean;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>{desc}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {series.points.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{empty}</p>
+        ) : (
+          <MultiLine
+            data={series.points}
+            series={series.chats.map((c) => ({
+              key: c.username,
+              label: c.display_name || c.username,
+            }))}
+          />
+        )}
+        {chats.length > 0 && (
+          <CompactRanking
+            rows={chats}
+            showMembers={showMembers}
+            metric={metric}
+          />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Toolbar above the top-chats grid. Three independent dimensions:
+ * - Top N: 3 / 5 / 10 rows per panel
+ * - Range: lifetime / 1y / 6m / 3m (affects both ranking + chart window)
+ *
+ * Aggregation (Week / Month / Year) is shared with the activity-over-time
+ * chart's switcher above, so we don't duplicate it here.
+ */
+function TopChatsToolbar({
+  agg,
+  split,
+  topN,
+  topRange,
+  locale,
+}: {
+  agg: MeAggregation;
+  split: boolean;
+  topN: MeTopN;
+  topRange: MeTopRange;
+  locale: "en" | "zh";
+}) {
+  const buildHref = (patch: { topN?: MeTopN; topRange?: MeTopRange }): string => {
+    const next = new URLSearchParams();
+    if (agg !== "month") next.set("agg", agg);
+    if (split) next.set("split", "1");
+    const nextN = patch.topN ?? topN;
+    if (nextN !== 5) next.set("topN", String(nextN));
+    const nextR = patch.topRange ?? topRange;
+    if (nextR !== "all") next.set("topRange", nextR);
+    const qs = next.toString();
+    return qs ? `/me?${qs}` : "/me";
+  };
+  const topNOpts: MeTopN[] = [3, 5, 10];
+  const rangeOpts: { key: MeTopRange; label: string }[] = [
+    { key: "all", label: locale === "zh" ? "全部" : "All" },
+    { key: "1y", label: locale === "zh" ? "近 1 年" : "1y" },
+    { key: "6m", label: locale === "zh" ? "近 6 月" : "6m" },
+    { key: "3m", label: locale === "zh" ? "近 3 月" : "3m" },
+  ];
+  return (
+    <div className="flex items-center gap-3 flex-wrap text-xs">
+      <div className="inline-flex items-center gap-1.5">
+        <span className="text-muted-foreground">
+          {locale === "zh" ? "Top" : "Top"}
+        </span>
+        <div className="inline-flex rounded-md border border-border/60 p-[2px]">
+          {topNOpts.map((n) => (
+            <Link
+              key={n}
+              href={buildHref({ topN: n })}
+              className={`rounded px-2 py-0.5 font-medium transition-colors ${
+                topN === n
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {n}
+            </Link>
+          ))}
+        </div>
+      </div>
+      <div className="inline-flex items-center gap-1.5">
+        <span className="text-muted-foreground">
+          {locale === "zh" ? "范围" : "Range"}
+        </span>
+        <div className="inline-flex rounded-md border border-border/60 p-[2px]">
+          {rangeOpts.map((o) => (
+            <Link
+              key={o.key}
+              href={buildHref({ topRange: o.key })}
+              className={`rounded px-2 py-0.5 font-medium transition-colors ${
+                topRange === o.key
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {o.label}
+            </Link>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
