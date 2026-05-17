@@ -1,9 +1,12 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { getContactAnalytics } from "@/lib/queries.contact";
+import { getSessionByUsername } from "@/lib/queries";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import { format, formatDistanceToNow } from "date-fns";
 import {
   ArrowLeft,
@@ -43,21 +46,30 @@ export default async function ContactDetailPage({
 }) {
   const { username } = await params;
   const decoded = decodeURIComponent(username);
-  const a = getContactAnalytics(decoded);
-  if (!a) return notFound();
+  // Cheap up-front read just to validate the URL + paint the header. The
+  // expensive analytics call happens inside <Suspense> below, so the back
+  // link + page title + archive button can render immediately while the
+  // charts stream in.
+  const sessionRow = getSessionByUsername(decoded) as
+    | {
+        username: string;
+        display_name: string;
+        chat_type: string;
+        archived: number;
+        member_count: number | null;
+        last_timestamp: number | null;
+        first_msg_timestamp: number | null;
+      }
+    | undefined;
+  if (!sessionRow) return notFound();
 
-  const { session, totals, monthly, hourly, latencies, styleMine, styleTheirs, msgTypeBreakdown } = a;
-  const themBuckets = bucketLatencies(latencies.themToYou);
-  const youBuckets = bucketLatencies(latencies.youToThem);
-  const themStats = latencyStats(latencies.themToYou);
-  const youStats = latencyStats(latencies.youToThem);
-  const hasLatency = latencies.themToYou.length + latencies.youToThem.length > 0;
-  const chatDisplay = session.display_name || session.username;
-
-  // Latest year with activity → recap link
-  const lastYear = totals.lastTs ? new Date(totals.lastTs * 1000).getFullYear() : null;
-  // Last active day for "view in calendar"
-  const lastDay = totals.lastTs ? format(new Date(totals.lastTs * 1000), "yyyy-MM-dd") : null;
+  const chatDisplay = sessionRow.display_name || sessionRow.username;
+  const lastYear = sessionRow.last_timestamp
+    ? new Date(sessionRow.last_timestamp * 1000).getFullYear()
+    : null;
+  const lastDay = sessionRow.last_timestamp
+    ? format(new Date(sessionRow.last_timestamp * 1000), "yyyy-MM-dd")
+    : null;
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-8 space-y-6">
@@ -68,6 +80,72 @@ export default async function ContactDetailPage({
         <ArrowLeft className="size-3.5 mr-1" /> Back to contacts
       </Link>
 
+      <header className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+            {chatDisplay}
+            {sessionRow.archived === 1 && (
+              <Badge variant="outline" className="text-amber-600 border-amber-500/50">
+                Archived
+              </Badge>
+            )}
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
+            <Badge variant="secondary">{sessionRow.chat_type}</Badge>
+            <span className="font-mono text-xs">{sessionRow.username}</span>
+            {sessionRow.member_count != null && (
+              <span className="text-xs">· {fmt(sessionRow.member_count)} members</span>
+            )}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {lastYear && (
+            <Link
+              href={`/recap/${lastYear}/${encodeURIComponent(sessionRow.username)}`}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-1.5 text-sm hover:bg-accent"
+            >
+              <Sparkles className="size-3.5" /> Recap {lastYear}
+            </Link>
+          )}
+          {lastDay && lastYear && (
+            <Link
+              href={`/calendar?year=${lastYear}&day=${lastDay}&chat=${encodeURIComponent(sessionRow.username)}`}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-1.5 text-sm hover:bg-accent"
+            >
+              <CalendarDays className="size-3.5" /> View in calendar
+            </Link>
+          )}
+          <ArchiveSessionButton
+            username={sessionRow.username}
+            archived={sessionRow.archived === 1}
+          />
+        </div>
+      </header>
+
+      <Suspense fallback={<ContactBodySkeleton />}>
+        <ContactBody decoded={decoded} />
+      </Suspense>
+    </div>
+  );
+}
+
+async function ContactBody({ decoded }: { decoded: string }) {
+  // Yield to the event loop once so React flushes the parent + the Suspense
+  // fallback before this sync better-sqlite3 call kicks off. Without this
+  // tiny await, the synchronous compute runs in the same render tick as the
+  // parent and TTFB == total time.
+  await new Promise((r) => setImmediate(r));
+  const a = getContactAnalytics(decoded);
+  if (!a) return notFound();
+  const { session, totals, monthly, hourly, latencies, styleMine, styleTheirs, msgTypeBreakdown } = a;
+  const themBuckets = bucketLatencies(latencies.themToYou);
+  const youBuckets = bucketLatencies(latencies.youToThem);
+  const themStats = latencyStats(latencies.themToYou);
+  const youStats = latencyStats(latencies.youToThem);
+  const hasLatency = latencies.themToYou.length + latencies.youToThem.length > 0;
+
+  return (
+    <div className="space-y-6">
       {a.meHandles.length === 0 && (
         <div className="flex gap-3 items-start rounded-md border border-amber-500/30 bg-amber-50/60 dark:bg-amber-900/10 px-3 py-2.5 text-sm">
           <Sparkles className="size-4 shrink-0 text-amber-600 mt-0.5" />
@@ -85,45 +163,6 @@ export default async function ContactDetailPage({
           </div>
         </div>
       )}
-
-      <header className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-            {chatDisplay}
-            {session.archived === 1 && (
-              <Badge variant="outline" className="text-amber-600 border-amber-500/50">
-                Archived
-              </Badge>
-            )}
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
-            <Badge variant="secondary">{session.chat_type}</Badge>
-            <span className="font-mono text-xs">{session.username}</span>
-            {session.member_count != null && (
-              <span className="text-xs">· {fmt(session.member_count)} members</span>
-            )}
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {lastYear && (
-            <Link
-              href={`/recap/${lastYear}/${encodeURIComponent(session.username)}`}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-1.5 text-sm hover:bg-accent"
-            >
-              <Sparkles className="size-3.5" /> Recap {lastYear}
-            </Link>
-          )}
-          {lastDay && lastYear && (
-            <Link
-              href={`/calendar?year=${lastYear}&day=${lastDay}&chat=${encodeURIComponent(session.username)}`}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-1.5 text-sm hover:bg-accent"
-            >
-              <CalendarDays className="size-3.5" /> View in calendar
-            </Link>
-          )}
-          <ArchiveSessionButton username={session.username} archived={session.archived === 1} />
-        </div>
-      </header>
 
       {/* Hero stat strip */}
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -423,6 +462,50 @@ export default async function ContactDetailPage({
             )}
           </CardContent>
         </Card>
+      </section>
+    </div>
+  );
+}
+
+function ContactBodySkeleton() {
+  // Mirrors the body structure roughly so the page doesn't jump on stream-in:
+  // hero strip (5 tiles), monthly chart, two-column grid, etc.
+  return (
+    <div className="space-y-6">
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Card key={i}>
+            <CardHeader className="pb-2">
+              <Skeleton className="h-3 w-20" />
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Skeleton className="h-7 w-24" />
+              <Skeleton className="h-3 w-28" />
+            </CardContent>
+          </Card>
+        ))}
+      </section>
+      <Card>
+        <CardHeader className="pb-2">
+          <Skeleton className="h-4 w-48" />
+          <Skeleton className="h-3 w-64 mt-2" />
+        </CardHeader>
+        <CardContent>
+          <Skeleton className="h-[220px] w-full" />
+        </CardContent>
+      </Card>
+      <section className="grid gap-6 lg:grid-cols-2">
+        {[0, 1].map((i) => (
+          <Card key={i}>
+            <CardHeader className="pb-2">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-3 w-48 mt-2" />
+            </CardHeader>
+            <CardContent>
+              <Skeleton className="h-[200px] w-full" />
+            </CardContent>
+          </Card>
+        ))}
       </section>
     </div>
   );

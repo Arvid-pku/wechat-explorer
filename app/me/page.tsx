@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { getMeStats, type MeAggregation, type MeTopN, type MeTopRange } from "@/lib/me-stats";
+import { getMeFunFacts, type FunFact } from "@/lib/me-fun";
 import {
   Card,
   CardContent,
@@ -9,6 +11,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Sparkles,
   MessageSquare,
@@ -673,7 +676,128 @@ export default async function MePage({
           </Card>
         )}
       </section>
+
+      {/* Did you know — dense info grid. Slow query mix; suspend so the rest
+          of the page paints first and this fills in. */}
+      <Suspense fallback={<FunFactsSkeleton locale={locale} />}>
+        <FunFactsPanel locale={locale} />
+      </Suspense>
     </div>
+  );
+}
+
+async function FunFactsPanel({ locale }: { locale: "en" | "zh" }) {
+  // Same micro-yield trick as the contact-detail page: a single setImmediate
+  // lets React stream the page's parent tree + this boundary's fallback
+  // before our synchronous SQL kicks off.
+  await new Promise((r) => setImmediate(r));
+  const facts = getMeFunFacts();
+  const tr = (k: TKey) => t(k, locale);
+  if (!facts.hasData) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>{tr("fun.title")}</CardTitle>
+          <CardDescription>{tr("fun.empty")}</CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Sparkles className="size-4 text-primary" /> {tr("fun.title")}
+        </CardTitle>
+        <CardDescription>{tr("fun.subtitle")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <FunFactGroup heading={tr("fun.section.time")} facts={facts.timeMarkers} locale={locale} />
+        <FunFactGroup heading={tr("fun.section.people")} facts={facts.interactions} locale={locale} />
+        <FunFactGroup heading={tr("fun.section.records")} facts={facts.records} locale={locale} />
+        <FunFactGroup heading={tr("fun.section.scope")} facts={facts.scope} locale={locale} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function FunFactGroup({
+  heading,
+  facts,
+  locale,
+}: {
+  heading: string;
+  facts: FunFact[];
+  locale: "en" | "zh";
+}) {
+  if (facts.length === 0) return null;
+  return (
+    <div>
+      <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">
+        {heading}
+      </p>
+      <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
+        {facts.map((f) => (
+          <FactRow key={f.key} fact={f} locale={locale} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FactRow({ fact: f, locale }: { fact: FunFact; locale: "en" | "zh" }) {
+  // Translate the label by key; values + subs stay as-rendered (they're
+  // already concrete strings with names/dates/numbers in them).
+  const label = t(f.key as TKey, locale);
+  const inner = (
+    <div className="space-y-0.5">
+      <p className="text-xs text-muted-foreground leading-tight">{label}</p>
+      <p className="text-sm font-medium tabular-nums break-words leading-snug">{f.value}</p>
+      {f.sub && (
+        <p className="text-[11px] text-muted-foreground tabular-nums leading-snug">{f.sub}</p>
+      )}
+    </div>
+  );
+  if (f.href) {
+    return (
+      <Link
+        href={f.href}
+        className="block rounded-md px-2 -mx-2 py-1.5 hover:bg-accent/40 transition-colors"
+      >
+        {inner}
+      </Link>
+    );
+  }
+  return <div className="px-2 -mx-2 py-1.5">{inner}</div>;
+}
+
+function FunFactsSkeleton({ locale }: { locale: "en" | "zh" }) {
+  const tr = (k: TKey) => t(k, locale);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Sparkles className="size-4 text-primary" /> {tr("fun.title")}
+        </CardTitle>
+        <CardDescription>{tr("fun.subtitle")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {[0, 1, 2, 3].map((g) => (
+          <div key={g} className="space-y-2">
+            <Skeleton className="h-3 w-24" />
+            <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="space-y-1">
+                  <Skeleton className="h-2.5 w-32" />
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-2.5 w-28" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 
