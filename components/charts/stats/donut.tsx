@@ -55,7 +55,7 @@ export function Donut({
       </Pie>
       <Tooltip
         contentStyle={TOOLTIP_STYLE}
-        formatter={(v: number, name: string) => [fmt(v), name]}
+        formatter={(v, name) => [fmt(Number(v)), String(name)]}
       />
       <Legend
         verticalAlign="bottom"

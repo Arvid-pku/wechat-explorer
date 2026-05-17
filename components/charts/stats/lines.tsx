@@ -65,7 +65,7 @@ export function StackedArea({
         tickLine={false}
         width={36}
       />
-      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => fmt(v)} />
+      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => fmt(Number(v))} />
       <Legend verticalAlign="top" iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
       <Area
         type="monotone"
@@ -138,7 +138,7 @@ export function TwoSeriesLine({
         tickLine={false}
         width={36}
       />
-      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => fmt(v)} />
+      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => fmt(Number(v))} />
       <Legend verticalAlign="top" iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
       <Line
         type="monotone"
@@ -215,7 +215,7 @@ export function MultiLine({
         tickLine={false}
         width={36}
       />
-      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => fmt(v)} />
+      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => fmt(Number(v))} />
       <Legend
         verticalAlign="top"
         iconType="circle"

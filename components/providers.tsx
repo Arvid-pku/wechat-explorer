@@ -20,7 +20,8 @@ export function Providers({ children }: { children: ReactNode }) {
   return (
     <ThemeProvider defaultTheme="light">
       <QueryClientProvider client={client}>
-        <TooltipProvider delayDuration={150}>{children}</TooltipProvider>
+        {/* `delay` is the @base-ui/react prop name (vs Radix's `delayDuration`). */}
+        <TooltipProvider delay={150}>{children}</TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>
   );

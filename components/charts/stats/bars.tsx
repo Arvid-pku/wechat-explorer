@@ -50,7 +50,7 @@ export function VerticalBars({
         tickLine={false}
         width={36}
       />
-      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => fmt(v)} />
+      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => fmt(Number(v))} />
       <Bar
         dataKey="value"
         name={seriesLabels?.[0] ?? "Count"}
@@ -131,7 +131,7 @@ export function LineWithBars({
         tickLine={false}
         width={36}
       />
-      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => fmt(v)} />
+      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => fmt(Number(v))} />
       <Bar
         dataKey="n"
         name="Count"

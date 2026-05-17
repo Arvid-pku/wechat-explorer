@@ -51,7 +51,7 @@ export function HourRadial({
         isAnimationActive={false}
         background={{ fill: "var(--color-muted)", opacity: 0.3 }}
       />
-      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => fmt(v)} />
+      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => fmt(Number(v))} />
     </>
   );
   const radialProps = {
