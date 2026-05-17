@@ -33,6 +33,12 @@ ok()   { printf "${G}  ✓${N} %s\n" "$1"; }
 
 cd "$(dirname "$0")/.."   # repo root
 
+# ── 0. icon (regenerate if SVG is newer than the .icns) ────────────────
+if [[ -f build/icon.svg && ( ! -f build/icon.icns || build/icon.svg -nt build/icon.icns ) ]]; then
+  step "Rebuilding icon (build/icon.svg → build/icon.icns)"
+  bash scripts/build-icon.sh
+fi
+
 # ── 1. compile electron/main.ts → electron/dist/main.js ────────────────
 step "Compiling Electron main"
 npx tsc -p electron
@@ -45,47 +51,75 @@ step "Building Next.js (next build --output=standalone)"
 npx next build
 ok ".next/standalone built"
 
-# ── 3. rebuild better-sqlite3 against Electron's Node ABI ──────────────
-# Tricky bit: the standalone copy at .next/standalone/node_modules ships
-# inside the .app, but Next.js strips binding.gyp + src/ from it, so
-# @electron/rebuild can't compile against the standalone copy directly.
-# Workaround: rebuild in-place against the project's full node_modules,
-# copy the resulting .node binary into the standalone tree, then restore
-# the system-Node binding so `npm test` / `npm run dev` continue to work.
-step "Rebuilding better-sqlite3 against Electron Node ABI"
+# ── 3. rebuild better-sqlite3 against Electron's Node ABI (universal) ─
+# Standalone strips binding.gyp + src/ from the shipped node_modules, so
+# we rebuild against the project's full tree and copy the result into the
+# standalone bundle. We do this twice — once per arch — and `lipo` the two
+# .node binaries together into a fat universal slice. Finally restore the
+# system-Node binding so dev / test workflows keep working untouched.
+step "Rebuilding better-sqlite3 against Electron Node ABI (arm64 + x64)"
 ELECTRON_VERSION=$(node -p "require('electron/package.json').version")
 NODE_BACKUP=$(mktemp -t better_sqlite3_node_backup.XXXXXX.node)
 cp node_modules/better-sqlite3/build/Release/better_sqlite3.node "$NODE_BACKUP"
-trap 'rm -f "$NODE_BACKUP"' EXIT
+# Cleanup AND restore the system-Node binding on exit. electron-builder's own
+# pack step also runs @electron/rebuild for each arch and leaves the binding
+# in the wrong ABI for `npm test` / `npm run dev`, so the restore has to
+# happen *after* everything else has finished.
+restore_node_binding() {
+  if [[ -f "$NODE_BACKUP" ]]; then
+    cp "$NODE_BACKUP" node_modules/better-sqlite3/build/Release/better_sqlite3.node 2>/dev/null || true
+  fi
+  rm -f "$NODE_BACKUP" "$BSQL_ARM64" "$BSQL_X64" "$BSQL_UNIVERSAL"
+}
+trap restore_node_binding EXIT
 
+BSQL_ARM64=$(mktemp -t bsql-arm64.XXXXXX.node)
+BSQL_X64=$(mktemp -t bsql-x64.XXXXXX.node)
+BSQL_UNIVERSAL=$(mktemp -t bsql-universal.XXXXXX.node)
+
+# arm64 slice
 npx @electron/rebuild \
   --version "$ELECTRON_VERSION" \
   --only better-sqlite3 \
+  --arch arm64 \
   --force
+cp node_modules/better-sqlite3/build/Release/better_sqlite3.node "$BSQL_ARM64"
+ok "  → arm64 slice"
 
-cp node_modules/better-sqlite3/build/Release/better_sqlite3.node \
-   .next/standalone/node_modules/better-sqlite3/build/Release/better_sqlite3.node
-ok "  → copied Electron $ELECTRON_VERSION binding into standalone"
+# x64 slice
+npx @electron/rebuild \
+  --version "$ELECTRON_VERSION" \
+  --only better-sqlite3 \
+  --arch x64 \
+  --force
+cp node_modules/better-sqlite3/build/Release/better_sqlite3.node "$BSQL_X64"
+ok "  → x64 slice"
 
-# Restore the system-Node binding so dev / test workflows keep working
-# without a separate `npm rebuild better-sqlite3` step.
-cp "$NODE_BACKUP" node_modules/better-sqlite3/build/Release/better_sqlite3.node
-ok "  → restored system Node binding in node_modules"
+# Fat universal binary
+lipo -create "$BSQL_ARM64" "$BSQL_X64" -output "$BSQL_UNIVERSAL"
+ok "  → universal .node ($(file "$BSQL_UNIVERSAL" | sed 's/.*: //'))"
+
+cp "$BSQL_UNIVERSAL" .next/standalone/node_modules/better-sqlite3/build/Release/better_sqlite3.node
+ok "  → copied universal binding into standalone"
 
 # ── 4. pack with electron-builder ──────────────────────────────────────
 step "Packaging .app with electron-builder"
-TARGETS=("--mac" "dir")
+# `--mac` alone (no target arg) tells electron-builder to use the target list
+# from the YAML config — which already specifies arch:universal. Passing
+# `--mac dir` would override the YAML and drop the universal arch.
+EB_FLAGS=("--mac")
 if (( BUILD_DMG )); then
-  TARGETS=("--mac" "dir" "dmg")
+  EB_FLAGS+=("--config.mac.target.0.target=dir" "--config.mac.target.1.target=dmg")
 fi
-npx electron-builder --config electron-builder.yml "${TARGETS[@]}"
+npx electron-builder --config electron-builder.yml "${EB_FLAGS[@]}"
 
 # ── 5. inject the Next.js standalone bundle into the .app ──────────────
 # electron-builder's extraResources copy strips `node_modules/` no matter
 # what filter we use, so we ship it ourselves after the pack. The runtime
 # (electron/main.ts) reads from `<resourcesPath>/app/.next/standalone/`.
+# Universal builds land at release/mac-universal/.
 step "Copying Next.js standalone bundle into the .app"
-for app_dir in release/mac-*/'WeChat Explorer.app'; do
+for app_dir in release/mac*/'WeChat Explorer.app'; do
   [[ -d "$app_dir" ]] || continue
   target="$app_dir/Contents/Resources/app"
   mkdir -p "$target/.next/standalone"
@@ -95,6 +129,12 @@ for app_dir in release/mac-*/'WeChat Explorer.app'; do
   rsync -a --delete public/ "$target/.next/standalone/public/"
   ok "  → $app_dir"
 done
+
+# Finally, restore the system-Node binding so the next `npm test` / `npm
+# run dev` doesn't fail with NODE_MODULE_VERSION mismatch. (The trap also
+# does this on early exit; this call is the happy-path version.)
+restore_node_binding
+ok "Restored system Node binding in node_modules"
 
 # ── 5. summary ─────────────────────────────────────────────────────────
 echo

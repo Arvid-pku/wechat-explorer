@@ -23,10 +23,15 @@ files:
 
 mac:
   category: public.app-category.productivity
-  # `dir` produces an unpacked .app under release/mac/ — fastest for testing.
-  # Add `dmg` here for distribution: `[ "dir", "dmg" ]`.
+  icon: build/icon.icns
+  # Universal target → one .app that runs on both Apple Silicon and Intel.
+  # The native better-sqlite3 binding is fused via `lipo` in build-app.sh
+  # before electron-builder runs. Set arch to a single-arch list (e.g.
+  # `["arm64"]`) to skip the cross-build if you only need one slice.
   target:
-    - dir
+    - target: dir
+      arch:
+        - universal
   # No code signing for self-distribution. Users will need to allow the app
   # in Settings → Privacy & Security → "Open Anyway" on first launch.
   identity: null
