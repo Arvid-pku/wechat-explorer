@@ -628,5 +628,3 @@ function computeMeFunFacts(): MeFunFacts {
   return { hasData: true, timeMarkers, interactions, records, scope };
 }
 
-// Silence unused warning — left in case we add a text-sample-based record.
-void MAX_TEXT_SAMPLE;

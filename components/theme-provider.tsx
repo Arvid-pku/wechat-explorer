@@ -11,15 +11,15 @@ import {
 } from "react";
 
 /**
- * Minimal theme provider, replacing `next-themes` here because Next.js 16
- * warns when next-themes injects a `<script>` into the React tree
+ * Minimal in-house theme provider. We originally used `next-themes`, but
+ * Next.js 16 warned when it injected a `<script>` into the React tree
  * ("Scripts inside React components are never executed when rendering on
- * the client. Consider using template tag instead").
+ * the client. Consider using template tag instead"), so the dependency was
+ * dropped in favour of this file.
  *
- * We keep the same `next-themes`-style API surface that the rest of the app
- * uses (`useTheme()` returns `{ theme, resolvedTheme, setTheme }` with
- * values "light" | "dark" | "system"). Anti-FOUC is handled by the small
- * script in app/layout.tsx that runs before React hydrates.
+ * Hook API: `useTheme()` returns `{ theme, resolvedTheme, setTheme }` with
+ * theme values "light" | "dark" | "system". Anti-FOUC is handled by the
+ * small script in app/layout.tsx that runs before React hydrates.
  */
 export type Theme = "light" | "dark" | "system";
 
