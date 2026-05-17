@@ -24,12 +24,14 @@ for arg in "$@"; do
 done
 
 if [[ -t 1 ]]; then
-  B="\033[1m"; G="\033[32m"; N="\033[0m"
+  B="\033[1m"; G="\033[32m"; Y="\033[33m"; R="\033[31m"; N="\033[0m"
 else
-  B=""; G=""; N=""
+  B=""; G=""; Y=""; R=""; N=""
 fi
 step() { printf "${B}==>${N} %s\n" "$1"; }
 ok()   { printf "${G}  ✓${N} %s\n" "$1"; }
+warn() { printf "${Y}  !${N} %s\n" "$1"; }
+err()  { printf "${R}  ✗${N} %s\n" "$1" >&2; }
 
 cd "$(dirname "$0")/.."   # repo root
 
@@ -99,6 +101,12 @@ ok "  → x64 slice"
 lipo -create "$BSQL_ARM64" "$BSQL_X64" -output "$BSQL_UNIVERSAL"
 ok "  → universal .node ($(file "$BSQL_UNIVERSAL" | sed 's/.*: //'))"
 
+# Next.js's standalone tracer leaves out `build/Release/` for native
+# modules — the .node file isn't statically imported so the tracer
+# doesn't see it. Create the directory and drop our universal binding
+# in. It'll be found at runtime via the bindings shim that better-
+# sqlite3 ships in lib/database.js.
+mkdir -p .next/standalone/node_modules/better-sqlite3/build/Release
 cp "$BSQL_UNIVERSAL" .next/standalone/node_modules/better-sqlite3/build/Release/better_sqlite3.node
 ok "  → copied universal binding into standalone"
 
@@ -111,28 +119,78 @@ step "Packaging .app with electron-builder"
 # don't break (it's now the default behaviour either way).
 npx electron-builder --config electron-builder.yml --mac
 
-# ── 5. inject the Next.js standalone bundle into the .app ──────────────
-# electron-builder's extraResources copy strips `node_modules/` no matter
-# what filter we use, so we ship it ourselves after the pack. The runtime
-# (electron/main.ts) reads from `<resourcesPath>/app/.next/standalone/`.
-# Universal builds land at release/mac-universal/.
-step "Copying Next.js standalone bundle into the .app"
-for app_dir in release/mac*/'WeChat Explorer.app'; do
-  [[ -d "$app_dir" ]] || continue
-  target="$app_dir/Contents/Resources/app"
-  mkdir -p "$target/.next/standalone"
-  # Use rsync so re-runs are idempotent and dotfiles are preserved.
-  rsync -a --delete .next/standalone/ "$target/.next/standalone/"
-  rsync -a --delete .next/static/ "$target/.next/standalone/.next/static/"
-  rsync -a --delete public/ "$target/.next/standalone/public/"
-  ok "  → $app_dir"
-done
+# Standalone copy + xattr cleanup happen inside scripts/after-pack.js, which
+# electron-builder invokes as its `afterPack` hook — early enough that the
+# inserted files survive the universal merge.
 
-# Finally, restore the system-Node binding so the next `npm test` / `npm
-# run dev` doesn't fail with NODE_MODULE_VERSION mismatch. (The trap also
-# does this on early exit; this call is the happy-path version.)
+# Restore the system-Node binding so the next `npm test` / `npm run dev`
+# doesn't fail with NODE_MODULE_VERSION mismatch.
 restore_node_binding
 ok "Restored system Node binding in node_modules"
+
+# ── 6. ad-hoc sign the universal .app ──────────────────────────────────
+# Two macOS Sequoia gotchas that broke us repeatedly here:
+#
+#   1. The universal-merged .app inherits `com.apple.provenance` and
+#      `com.apple.FinderInfo` xattrs that codesign refuses to overwrite
+#      ("resource fork, Finder information, or similar detritus not
+#      allowed"). And `xattr -cr` can't strip them — they're kernel-set
+#      on macOS 15+. The reliable workaround is a `tar --no-mac-metadata`
+#      roundtrip: tar archives without xattrs, extract recreates the
+#      bundle as a fresh tree without any provenance baggage.
+#
+#   2. @electron/osx-sign defaults pass `--options runtime` to codesign,
+#      which enables Sequoia's strict team-ID consistency check. Even
+#      with everything ad-hoc-signed (no team), the runtime flag makes
+#      Sequoia refuse to map the framework into the ad-hoc main binary
+#      ("non-platform mapped file have different Team IDs"). The fix
+#      is `optionsForFile: () => ({ signatureFlags: [] })` in
+#      scripts/sign-app.js — pure ad-hoc with no runtime hardening.
+step "Ad-hoc signing the universal .app"
+APP="release/mac-universal/WeChat Explorer.app"
+APP_PARENT=$(dirname "$APP")
+APP_NAME=$(basename "$APP")
+
+# tar-roundtrip via /tmp to strip kernel-set xattrs. Critical detail:
+# we extract into /tmp (not back into release/), because Sequoia auto-
+# re-applies com.apple.provenance to executables landed in user paths.
+# Signing happens in /tmp where xattrs stay clean, then we move the
+# signed .app back to release/ in one shot (a move within the same
+# filesystem doesn't re-trigger the provenance hook).
+TAR_TMP=$(mktemp -t wechat-explorer-app.XXXXXX.tar)
+SIGN_TMP=$(mktemp -d -t wechat-explorer-sign.XXXXXX)
+trap 'rm -f "$TAR_TMP"; rm -rf "$SIGN_TMP"; restore_node_binding; rm -f "$NODE_BACKUP" "$BSQL_ARM64" "$BSQL_X64" "$BSQL_UNIVERSAL"' EXIT
+tar --no-mac-metadata -cf "$TAR_TMP" -C "$APP_PARENT" "$APP_NAME"
+rm -rf "$APP"
+tar -xf "$TAR_TMP" -C "$SIGN_TMP"
+ok "  → tar-roundtripped to $SIGN_TMP"
+
+# Sign in /tmp where xattrs stay clean.
+APP_TMP="$SIGN_TMP/$APP_NAME" APP="$APP_TMP" node scripts/sign-app.js
+
+# Move signed .app back. `mv` within the same filesystem (both /tmp and
+# release/ are on the same APFS volume) is metadata-only and doesn't
+# re-trigger provenance; if it ever did, the signature is already
+# embedded and won't break.
+mv "$SIGN_TMP/$APP_NAME" "$APP"
+ok "  → moved signed .app back to release/mac-universal/"
+
+codesign -dv "$APP" 2>&1 | head -2 || true
+ok "  → ad-hoc signed (no hardened runtime → loads on Sequoia)"
+
+# ── 7. assemble the .dmg from the signed .app ──────────────────────────
+step "Creating .dmg"
+VERSION=$(node -p "require('./package.json').version")
+DMG_PATH="release/WeChat Explorer-${VERSION}-universal.dmg"
+rm -f "$DMG_PATH"
+hdiutil create \
+  -volname "WeChat Explorer" \
+  -srcfolder "$APP" \
+  -ov \
+  -format UDZO \
+  -fs HFS+ \
+  "$DMG_PATH" >/dev/null
+ok "  → $DMG_PATH ($(du -h "$DMG_PATH" | awk '{print $1}'))"
 
 # ── 5. summary ─────────────────────────────────────────────────────────
 echo
