@@ -71,7 +71,7 @@ open "release/mac-universal/WeChat Explorer.app"
 Caveats:
 
 - **Unsigned bundle** — macOS Gatekeeper blocks unknown developers. First launch: right-click → Open, or allow under **Settings → Privacy & Security → "Open Anyway"**. (Trust your own builds; don't curl-pipe-bash someone else's `.app`.)
-- **`wx-cli` is still the prerequisite** — it can't be bundled (needs `sudo` to attach to WeChat's process), but the in-app wizard now installs and initialises it for you. Same end state as `brew install jackwener/tap/wx-cli && sudo wx init`, but driven from buttons.
+- **`wx-cli` is still the prerequisite** — it can't be bundled (needs `sudo` to attach to WeChat's process), but the in-app wizard now installs and initialises it for you. Same end state as `npm install -g @jackwener/wx-cli && sudo wx init`, but driven from buttons.
 - **Data path is the same as the web version**: `~/.wechat-explorer/index.db`. Override with `WE_DATA_DIR=<path>` set in the environment before launching.
 - For UI iteration without re-bundling, `npm run app:dev` opens the Electron window pointed at an already-running `npm run dev`.
 - To regenerate the icon: edit `build/icon.svg`, then `bash scripts/build-icon.sh` (the build script auto-runs this when the SVG is newer than the `.icns`).
@@ -91,7 +91,7 @@ npm run setup:dev                 # same as --dev
 `wx-cli` is the bridge that reads WeChat's local SQLite. Install it once:
 
 ```bash
-brew install jackwener/tap/wx-cli
+npm install -g @jackwener/wx-cli
 sudo wx init                      # caches WeChat DB keys to ~/.wx-cli/
 ```
 

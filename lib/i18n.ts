@@ -325,16 +325,16 @@ const DICT = {
   "onboarding.runQuickIndex": { en: "Run quick index", zh: "运行快速索引" },
   "onboarding.indexRunning": { en: "Indexing…", zh: "正在索引…" },
 
-  "onboarding.step.brewTitle": { en: "Install Homebrew", zh: "安装 Homebrew" },
-  "onboarding.step.brewBody": {
-    en: "Homebrew is the macOS package manager we'll use to install wx-cli. Skip if you already have it.",
-    zh: "Homebrew 是 macOS 上的包管理器，下一步会用它安装 wx-cli。已经装过的话可以跳过。",
+  "onboarding.step.nodeTitle": { en: "Install Node.js", zh: "安装 Node.js" },
+  "onboarding.step.nodeBody": {
+    en: "wx-cli ships as an npm package, so a working Node.js + npm are needed once. Any version ≥ 21 is fine; Homebrew, fnm, or the official installer all work. Skip if you already have it.",
+    zh: "wx-cli 是一个 npm 包，所以需要先装一次 Node.js + npm。版本 ≥ 21 即可；用 Homebrew、fnm 或官方安装包都行。已经装过的话可以跳过。",
   },
-  "onboarding.step.brewLink": { en: "brew.sh", zh: "brew.sh" },
+  "onboarding.step.nodeLink": { en: "nodejs.org", zh: "nodejs.org" },
   "onboarding.step.wxCliTitle": { en: "Install wx-cli", zh: "安装 wx-cli" },
   "onboarding.step.wxCliBody": {
-    en: "wx-cli is the bridge that reads WeChat's local databases. We run brew install in the background.",
-    zh: "wx-cli 是读取微信本地数据库的桥梁。我们会在后台运行 brew install。",
+    en: "wx-cli is the bridge that reads WeChat's local databases. We run npm install -g @jackwener/wx-cli in the background.",
+    zh: "wx-cli 是读取微信本地数据库的桥梁。我们会在后台运行 npm install -g @jackwener/wx-cli。",
   },
   "onboarding.step.wechatAppTitle": { en: "Install WeChat for Mac", zh: "安装 macOS 版微信" },
   "onboarding.step.wechatAppBody": {

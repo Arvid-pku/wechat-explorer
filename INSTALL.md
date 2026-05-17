@@ -5,7 +5,7 @@ This is the long version. If you'd rather move fast, the [README Quickstart](REA
 ## TL;DR
 
 ```bash
-brew install jackwener/tap/wx-cli && sudo wx init     # the macOS-resign / key-extraction prerequisite
+npm install -g @jackwener/wx-cli && sudo wx init     # the macOS-resign / key-extraction prerequisite
 git clone <your-fork> wechat-explorer && cd wechat-explorer
 ./scripts/setup.sh --dev                              # platform/Node checks, deps, native compile, first index, dev server
 ```
@@ -29,18 +29,15 @@ Windows / Linux WeChat clients store their databases differently. If you have a 
 
 ## 1. Install `wx-cli`
 
-`wx-cli` lives at <https://github.com/jackwener/wx-cli>. Its README is the source of truth for setup — but here is the short version.
+`wx-cli` lives at <https://github.com/jackwener/wx-cli> and ships as the npm package [`@jackwener/wx-cli`](https://www.npmjs.com/package/@jackwener/wx-cli). You'll need Node.js + npm for this step — install Node first (see §2 below) if you don't have it.
 
 ### a. Install the binary
 
-The simplest path is Homebrew if a tap is available, or downloading a release binary. Check the upstream repo's README for the current command. Worst case:
-
 ```bash
-git clone https://github.com/jackwener/wx-cli
-cd wx-cli
-make build
-sudo cp wx /usr/local/bin/
+npm install -g @jackwener/wx-cli
 ```
+
+No `sudo` if your npm prefix is user-writable (the default for Homebrew Node, fnm, nvm, etc.). If you get `EACCES`, either fix your npm prefix (`npm config set prefix ~/.npm-global` and add it to `PATH`) or prepend `sudo`.
 
 Verify:
 ```bash

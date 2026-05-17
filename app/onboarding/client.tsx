@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { t, type Locale, type TKey } from "@/lib/i18n";
 
 interface OnboardingState {
-  brew: boolean;
+  node: boolean;
   wxCli: boolean;
   wechatApp: boolean;
   wechatResigned: boolean | "unknown";
@@ -49,20 +49,20 @@ interface Step {
 
 const STEPS: Step[] = [
   {
-    id: "brew",
-    titleKey: "onboarding.step.brewTitle",
-    bodyKey: "onboarding.step.brewBody",
-    isDone: (s) => s.brew,
+    id: "node",
+    titleKey: "onboarding.step.nodeTitle",
+    bodyKey: "onboarding.step.nodeBody",
+    isDone: (s) => s.node,
     action: null,
-    externalUrl: "https://brew.sh",
-    externalLabelKey: "onboarding.step.brewLink",
+    externalUrl: "https://nodejs.org/",
+    externalLabelKey: "onboarding.step.nodeLink",
   },
   {
     id: "wxCli",
     titleKey: "onboarding.step.wxCliTitle",
     bodyKey: "onboarding.step.wxCliBody",
     isDone: (s) => s.wxCli,
-    isBlocked: (s) => !s.brew,
+    isBlocked: (s) => !s.node,
     action: "install-wx-cli",
   },
   {

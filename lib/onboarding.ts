@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export type OnboardingStep =
-  | "brew"
+  | "node"
   | "wxCli"
   | "wechatApp"
   | "wechatResigned"
@@ -22,8 +22,8 @@ export type OnboardingStep =
   | "indexed";
 
 export interface OnboardingState {
-  /** Homebrew is installed. */
-  brew: boolean;
+  /** Node.js + npm are installed (needed for the wx-cli npm install). */
+  node: boolean;
   /** `wx` is on PATH. */
   wxCli: boolean;
   /** `/Applications/WeChat.app` exists. */
@@ -63,8 +63,10 @@ function tryRun(cmd: string, args: string[]): string | null {
 }
 
 export function detectOnboardingState(): OnboardingState {
-  const brew =
-    existsSync("/opt/homebrew/bin/brew") || existsSync("/usr/local/bin/brew");
+  // npm is the actual prerequisite — wx-cli ships as @jackwener/wx-cli on
+  // npm, installed globally via `npm install -g`. We don't need Homebrew
+  // specifically; whatever Node/npm install path the user prefers is fine.
+  const node = tryRun("which", ["npm"]) !== null;
   const wxCli = tryRun("which", ["wx"]) !== null;
   const wechatApp = existsSync("/Applications/WeChat.app");
   const wechatRunning =
@@ -91,14 +93,14 @@ export function detectOnboardingState(): OnboardingState {
 
   // The chain order matches the natural flow in the UI.
   let nextStep: OnboardingStep | null = null;
-  if (!brew) nextStep = "brew";
+  if (!node) nextStep = "node";
   else if (!wxCli) nextStep = "wxCli";
   else if (!wechatApp) nextStep = "wechatApp";
   else if (wechatResigned === false) nextStep = "wechatResigned";
   else if (!wxKeys) nextStep = "wxKeys";
 
   return {
-    brew,
+    node,
     wxCli,
     wechatApp,
     wechatResigned,
@@ -124,8 +126,11 @@ export interface OnboardingAction {
 
 export const ONBOARDING_ACTIONS: Record<string, OnboardingAction> = {
   "install-wx-cli": {
-    description: "Install wx-cli via Homebrew",
-    shell: "brew install jackwener/tap/wx-cli",
+    description: "Install wx-cli via npm",
+    // The real upstream is @jackwener/wx-cli on npm, NOT a Homebrew tap.
+    // No sudo needed if the user's npm prefix is user-writable (the
+    // default for Homebrew node, nvm, fnm, etc.).
+    shell: "npm install -g @jackwener/wx-cli",
     requiresSudo: false,
   },
   "resign-wechat": {

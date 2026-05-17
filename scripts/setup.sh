@@ -86,7 +86,7 @@ if command -v wx >/dev/null; then
   fi
 else
   warn "wx-cli not found."
-  hint "Install with:  brew install jackwener/tap/wx-cli"
+  hint "Install with:  npm install -g @jackwener/wx-cli"
   hint "After install, ad-hoc-resign WeChat.app and run:  sudo wx init"
   hint "Walkthrough:  INSTALL.md → '1. Install wx-cli'"
   if (( REQUIRE_WX )); then
