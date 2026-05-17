@@ -43,20 +43,31 @@ const ME_HANDLES_KEY = "me_handles";
 const ME_BACKFILLED_AT_KEY = "my_msg_count_backfilled_at";
 
 export function detectMeHandles(): { handles: string[]; rankings: { sender: string; distinct_chats: number; msgs: number }[] } {
-  const db = getDb();
-  // Look at the top non-empty senders. NEVER pick the empty-string sender as
-  // a me-handle: in WeChat 1:1 private chats wx CLI emits `sender=""` for the
-  // OTHER party's messages (the user's own messages get the real handle).
-  // Counting "" as me classifies every incoming private message as outgoing
-  // and ~doubles "your share" across the app.
-  const rows = db.prepare(`
-    SELECT sender, COUNT(DISTINCT chat_username) AS distinct_chats, COUNT(*) AS msgs
-    FROM messages
-    WHERE chat_username IS NOT NULL AND sender != ''
-    GROUP BY sender
-    ORDER BY distinct_chats DESC
-    LIMIT 5
-  `).all() as { sender: string; distinct_chats: number; msgs: number }[];
+  // Cache the rankings query — it's a full-scan group-by over `messages`
+  // (~1s on a 1M-row corpus) and the result only changes when the indexer
+  // adds new rows (i.e. on the next index epoch). The handle derivation is
+  // cheap and runs every call. `{ignoreArchive: true}` because archive flips
+  // don't affect which senders exist.
+  const rows = getCachedJSON<{ sender: string; distinct_chats: number; msgs: number }[]>(
+    "me-handle-rankings",
+    () => {
+      const db = getDb();
+      // Look at the top non-empty senders. NEVER pick the empty-string sender
+      // as a me-handle: in WeChat 1:1 private chats wx CLI emits `sender=""`
+      // for the OTHER party's messages (the user's own messages get the real
+      // handle). Counting "" as me classifies every incoming private message
+      // as outgoing and ~doubles "your share" across the app.
+      return db.prepare(`
+        SELECT sender, COUNT(DISTINCT chat_username) AS distinct_chats, COUNT(*) AS msgs
+        FROM messages
+        WHERE chat_username IS NOT NULL AND sender != ''
+        GROUP BY sender
+        ORDER BY distinct_chats DESC
+        LIMIT 5
+      `).all() as { sender: string; distinct_chats: number; msgs: number }[];
+    },
+    { ignoreArchive: true },
+  );
 
   if (rows.length === 0) return { handles: [], rankings: [] };
   const top = rows[0].distinct_chats;
@@ -391,6 +402,64 @@ export interface ContactRow {
   archived: number;
   /** "hit X-msg cap" when the last indexing pass capped early. */
   last_history_error: string | null;
+}
+
+/**
+ * Count sessions matching the same filters as `listSessions`. Used to render
+ * "Showing X of Y" hints without paying for the inner `url_counts` CTE.
+ */
+export interface SettingsCounts {
+  sessions: number;
+  archived: number;
+  contacts: number;
+  messages: number;
+  urls: number;
+  messages_unmatched: number;
+  urls_unmatched: number;
+}
+
+/**
+ * Combined COUNT(*) for the Settings page. Five of these scan the full
+ * `messages` / `urls` tables (~1M / ~90k rows on a typical corpus); running
+ * them on every Settings render put the cold load at ~6s. The result is
+ * stable until the next index epoch — wrap in `getCachedJSON` and reuse.
+ */
+export function getSettingsCounts(): SettingsCounts {
+  return getCachedJSON("settings-counts", () => {
+    const db = getDb();
+    return db
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM sessions) AS sessions,
+           (SELECT COUNT(*) FROM sessions WHERE archived = 1) AS archived,
+           (SELECT COUNT(*) FROM contacts) AS contacts,
+           (SELECT COUNT(*) FROM messages) AS messages,
+           (SELECT COUNT(*) FROM urls) AS urls,
+           (SELECT COUNT(*) FROM messages WHERE chat_username IS NULL) AS messages_unmatched,
+           (SELECT COUNT(*) FROM urls WHERE chat_username IS NULL) AS urls_unmatched`,
+      )
+      .get() as SettingsCounts;
+  });
+}
+
+export function countSessions(opts: { type?: string; q?: string; includeArchived?: boolean; onlyArchived?: boolean } = {}): number {
+  const db = getDb();
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+  if (opts.onlyArchived) conditions.push("archived = 1");
+  else if (!opts.includeArchived) conditions.push("archived = 0");
+  if (opts.type && opts.type !== "all") {
+    conditions.push("chat_type = ?");
+    params.push(opts.type);
+  }
+  if (opts.q) {
+    conditions.push("display_name LIKE ?");
+    params.push(`%${opts.q}%`);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  return (
+    db.prepare(`SELECT COUNT(*) AS n FROM sessions ${where}`).get(...params) as { n: number }
+  ).n;
 }
 
 export function listSessions(opts: { type?: string; sort?: string; limit?: number; q?: string; includeArchived?: boolean; onlyArchived?: boolean } = {}): ContactRow[] {
