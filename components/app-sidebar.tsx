@@ -47,7 +47,13 @@ export function AppSidebar({ onOpenCommand }: AppSidebarProps) {
   const pathname = usePathname();
   const { t, locale } = useLocale();
   return (
-    <aside className="hidden md:flex md:w-60 lg:w-64 shrink-0 flex-col border-r border-border/60 bg-sidebar text-sidebar-foreground">
+    // `sticky top-0 h-screen` pins the sidebar to the viewport on long pages
+    // — Settings (footer item) stays one click away no matter how far down
+    // you've scrolled. `overflow-y-auto` lets the nav scroll inside the
+    // sidebar if a future entry pushes total height past the viewport.
+    // `self-start` is needed so the flex container doesn't stretch the
+    // sticky element to the document height (which would defeat sticky).
+    <aside className="hidden md:flex md:w-60 lg:w-64 shrink-0 flex-col border-r border-border/60 bg-sidebar text-sidebar-foreground sticky top-0 h-screen self-start overflow-y-auto">
       <div className="flex h-14 items-center gap-2 border-b border-border/60 px-4 font-semibold">
         <span className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary">
           <Sparkles className="size-4" />
