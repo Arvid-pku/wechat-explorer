@@ -36,47 +36,46 @@ If you've ever wanted to read your own chat history without trusting a third par
 
 ## Quickstart
 
-1. **Install `wx-cli`** (one-time, macOS only — see [INSTALL.md](INSTALL.md#1-install-wx-cli) for the full flow). The summary:
-   ```bash
-   brew install jackwener/tap/wx-cli   # or follow the upstream README
-   sudo wx init                        # caches WeChat DB keys to ~/.wx-cli/
-   ```
-   `wx init` needs WeChat for Mac to be running and ad-hoc resigned. The upstream repo walks through the resign step; [INSTALL.md](INSTALL.md#1-install-wx-cli) summarises it.
+Two commands after a clone — the setup script handles dependencies, the native SQLite compile, and the first index:
 
-2. **Clone and install dependencies.** Either runtime works:
-   ```bash
-   git clone <your-fork> wechat-explorer
-   cd wechat-explorer
-   bun install      # fast — recommended
-   # OR
-   npm install
-   ```
+```bash
+git clone <your-fork> wechat-explorer && cd wechat-explorer
+./scripts/setup.sh --dev
+```
 
-3. **Compile the native SQLite binding.** `better-sqlite3` ships a C++ addon that needs a build step the first time:
-   ```bash
-   # if you used bun install:
-   bun pm trust better-sqlite3
-   # if you used npm install:
-   npm rebuild better-sqlite3
-   ```
-   If this fails, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md#better-sqlite3-cannot-find-module) — usually it just needs Xcode Command Line Tools.
+That runs platform / Node / wx-cli checks, picks `bun` or `npm` based on what's installed, rebuilds the native `better-sqlite3` addon, runs a quick index if `wx-cli` is initialised, and starts the dev server. Open <http://localhost:3719>. Re-running the script is safe — every step is idempotent.
 
-4. **Build your first index.** This pulls sessions, contacts, and link messages out of WeChat (~20 s on a typical corpus):
-   ```bash
-   npm run index:quick
-   ```
-   Later, when you want full-text search to cover everything, run a deep index too (20–40 min the first time, incremental after that):
-   ```bash
-   npm run index:deep
-   ```
+Other flags:
 
-5. **Start the app.**
-   ```bash
-   npm run dev
-   ```
-   Open <http://localhost:3719>.
+```bash
+./scripts/setup.sh                # install + first index, no dev server
+./scripts/setup.sh --no-index     # install only (skip the initial index)
+./scripts/setup.sh --skip-wx      # set up the web tier without wx-cli (CI / docs preview)
+npm run setup                     # same as ./scripts/setup.sh, for users who prefer npm scripts
+npm run setup:dev                 # same as --dev
+```
 
-That's it. For a longer hand-holding install guide — node version managers, npm-vs-bun trade-offs, what to do when a step fails — see [INSTALL.md](INSTALL.md).
+### One prerequisite the script can't do for you
+
+`wx-cli` is the bridge that reads WeChat's local SQLite. Install it once:
+
+```bash
+brew install jackwener/tap/wx-cli
+sudo wx init                      # caches WeChat DB keys to ~/.wx-cli/
+```
+
+`wx init` requires WeChat for Mac to be **ad-hoc resigned** and running — that's a one-time macOS quirk. The setup script detects whether `wx-cli` is installed and initialised, and prints clear next steps if it isn't. [INSTALL.md](INSTALL.md#1-install-wx-cli) walks through the resign flow.
+
+### Manual install (if the script can't run)
+
+If you're on Linux, in CI, or just don't want to run a bash script, the long form is in [INSTALL.md](INSTALL.md). Summary:
+
+```bash
+bun install && bun pm trust better-sqlite3        # OR: npm install && npm rebuild better-sqlite3
+npm run index:quick                               # ~20s — sessions + contacts + bulk link messages
+npm run index:deep                                # 20–40 min on first run — full-text history per chat
+npm run dev
+```
 
 ## System requirements
 

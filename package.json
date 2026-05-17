@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "setup:dev": "bash scripts/setup.sh --dev",
     "dev": "next dev --port 3719",
     "build": "next build",
     "start": "next start --port 3719",

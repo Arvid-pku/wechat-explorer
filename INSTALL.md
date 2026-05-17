@@ -1,6 +1,25 @@
 # Installing WeChat Explorer
 
-This is the long version. If you'd rather move fast, the [README Quickstart](README.md#quickstart) is five steps.
+This is the long version. If you'd rather move fast, the [README Quickstart](README.md#quickstart) is two commands and a setup script.
+
+## TL;DR
+
+```bash
+brew install jackwener/tap/wx-cli && sudo wx init     # the macOS-resign / key-extraction prerequisite
+git clone <your-fork> wechat-explorer && cd wechat-explorer
+./scripts/setup.sh --dev                              # platform/Node checks, deps, native compile, first index, dev server
+```
+
+The setup script (`scripts/setup.sh`) is idempotent — re-running it is safe, and it picks `bun` vs `npm` based on what you have. Flags:
+
+| Flag | Effect |
+|---|---|
+| _(none)_ | Install deps + native compile + first index. Don't start the server. |
+| `--dev` | After setup, start `npm run dev` and serve on `localhost:3719`. |
+| `--no-index` | Skip the initial `index:quick`. Useful if `wx-cli` isn't set up yet. |
+| `--skip-wx` | Don't fail if `wx-cli` is missing (e.g. CI builds, doc previews). |
+
+If the script can't run on your machine (different shell, CI sandbox, custom Node manager), the rest of this file is the manual walkthrough.
 
 ## Platform: macOS only (for now)
 
