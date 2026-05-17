@@ -6,6 +6,94 @@ If your symptom isn't here, the dev server's console + `wx-cli`'s stderr usually
 
 ---
 
+## The downloaded `.app` won't open — "Apple could not verify…"
+
+**Symptom:** you dragged `WeChat Explorer.app` from the `.dmg` into `/Applications`, double-clicked, and got either:
+
+- *"Apple could not verify "WeChat Explorer.app" is free of malware…"* (Sequoia, no Open button), or
+- *"WeChat Explorer.app can't be opened because it is from an unidentified developer"* (older macOS), or
+- Nothing — the icon bounces in the Dock once and disappears.
+
+**Cause:** the bundle is ad-hoc signed (we don't have a paid Apple Developer ID for proper Developer ID signing + notarization), so macOS Gatekeeper blocks it on first launch. The "icon bounces and disappears" variant is older builds where the bundle was unsigned entirely — only seen in pre-v0.1.2; the current release ad-hoc signs.
+
+**Fix (Sequoia 15.x — most common today):** Sequoia removed the "Open Anyway" button from the warning dialog itself. The route is:
+
+1. Dismiss the dialog (click **Done**, not Move to Trash).
+2. Open **System Settings → Privacy & Security**.
+3. Scroll to the bottom. You'll see *"WeChat Explorer was blocked to protect your Mac."* Click **Open Anyway**.
+4. macOS prompts once more; click Open, enter your password. From now on, double-click works normally.
+
+**Fix (Sonoma 14.x and earlier):** right-click the app icon → **Open**, then **Open** in the dialog. One time.
+
+**Last-resort Terminal workaround**: works on any macOS, but only do this if you trust the source (you should — it's your own download from the Releases page):
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/WeChat Explorer.app"
+```
+
+If even that doesn't make it launch, the ad-hoc signature is broken. Re-sign manually:
+```bash
+codesign --force --deep --sign - "/Applications/WeChat Explorer.app"
+```
+
+---
+
+## Wizard's "Re-sign WeChat" step fails with "Operation not permitted"
+
+**Symptom:** in the in-app onboarding wizard, you click *Run it* on the **Re-sign WeChat** step. The macOS password dialog pops up. You enter your password. The wizard then shows:
+
+```
+0:105: execution error: /Applications/WeChat.app: replacing existing signature
+/Applications/WeChat.app: Operation not permitted
+In subcomponent: /Applications/WeChat.app/Contents/Frameworks/ConfSDKdyn.framework (1)
+```
+
+(and incorrectly labels it as "Cancelled" — that's a v0.1.2 bug being fixed in v0.1.3).
+
+**Cause:** macOS Sequoia's **App Management** privacy gate. Even with `sudo` via `osascript`'s `with administrator privileges`, macOS won't let a non-notarized app modify other installed `.app`s in `/Applications/`. The codesign call succeeds at writing the outer bundle but is refused on `ConfSDKdyn.framework` (or another inner framework) and bails out. Apple doesn't reliably even let users toggle App Management permission for unsigned apps, so the GUI path is closed.
+
+**Fix:** quit the wizard, open **Terminal.app**, and do the two privileged steps yourself:
+
+```bash
+# 1. Make sure WeChat is fully quit (⌘Q in WeChat, not just closed window).
+osascript -e 'tell application "WeChat" to quit'
+
+# 2. Re-sign with your ad-hoc signature. macOS may prompt Terminal for
+# "App Management" permission the first time — click Allow.
+sudo codesign --force --deep --sign - /Applications/WeChat.app
+
+# 3. Launch WeChat from Finder or `open`, log in normally, leave it running.
+open /Applications/WeChat.app
+
+# 4. Once WeChat is logged in: extract the keys.
+sudo wx init
+```
+
+When `wx init` writes `~/.wx-cli/all_keys.json`, you're done with the prereq chain. Restart **WeChat Explorer** — the wizard detects everything as ready and jumps to *Build first index*.
+
+A proper Apple Developer ID + notarization would let our wizard do all of this without Terminal. That's not in scope until/unless we publish on something other than self-distribution.
+
+---
+
+## All contacts show "0 messages" — dashboards look empty
+
+**Symptom:** the Contacts table populates (hundreds or thousands of rows with real names + last-active times), but every row's *Messages* and *Links* column reads `0`. Clicking into any contact shows no analytics. `/me`, calendar, recap are all empty.
+
+**Cause:** only the **Quick index** has run, which fetches the session list + bulk link messages but **not per-chat history**. The wizard's "Build first index" button runs `index:quick` (~20 s) — that's intentional, because the deep pass takes 20-40 min on first run.
+
+**Fix:** in the app, open **Settings → Reindex → Deep index**. Watch the live progress bar (SSE-streamed). Walk away for half an hour the first time; later runs are incremental and fast. After it finishes:
+
+- Contact rows show real message counts.
+- Click any contact → monthly bars, hourly grid, reply latency, vocab diff, style fingerprint all populated.
+- Search hits actual message bodies, not just sessions.
+- `/me`, `/calendar`, `/recap/<year>` come to life.
+
+If specific heavy chats show an amber ⚠ on their count with a "rerun deep index" tooltip, that's the 50,000-msg-per-pass cap — re-run Deep index a couple more times to backfill older history.
+
+Sidebar note: contact names like `wxid_abc…`, `gh_xxx`, or `12345@chatroom` are how WeChat internally identifies people / 公众号s / groups. After the deep index pulls message metadata, many of those resolve to friendlier names; some don't (because WeChat itself doesn't have a display name for them).
+
+---
+
 ## The dev server stops responding
 
 **Symptom:** pages take forever to load, or the browser just hangs after a hot-reload. `ps aux | grep postcss` shows hundreds (or thousands) of `postcss.js` processes piled up.

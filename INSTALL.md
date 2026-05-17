@@ -52,8 +52,10 @@ wx --version
 The upstream `wx-cli` README has the canonical instructions. The shape of it:
 
 1. Quit WeChat completely (`⌘Q`, not just close the window).
-2. Re-sign the bundle with `codesign --force --deep --sign - /Applications/WeChat.app` (or whatever the upstream README currently says).
+2. Re-sign the bundle: `sudo codesign --force --deep --sign - /Applications/WeChat.app`.
 3. Re-launch WeChat from `/Applications` and log in normally.
+
+**Do this in Terminal**, not via the standalone `.app`'s onboarding wizard. On macOS Sequoia, Apple's *App Management* privacy gate blocks non-notarized apps from modifying other installed apps in `/Applications/`, even when they escalate to root via `osascript`. Terminal can do it (you may be prompted once to grant Terminal "App Management" permission — click Allow); our `.app` can't. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#wizards-re-sign-wechat-step-fails-with-operation-not-permitted) for the gory details.
 
 ### c. Initialize key extraction
 

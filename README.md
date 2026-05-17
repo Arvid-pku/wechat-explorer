@@ -58,8 +58,8 @@ The bundle:
 
 - **Universal binary** — runs on both Apple Silicon and Intel Macs. `better-sqlite3`'s native binding is fat-merged via `lipo` so both architectures load it natively.
 - **Custom icon** — the chat-bubble-with-bar-chart squircle (see `build/icon.svg`).
-- **Includes a guided first-run wizard** — opens to `/onboarding` if `wx-cli` isn't set up, with one-click buttons for `brew install`, the WeChat re-sign step, and `sudo wx init`. The sudo steps trigger the standard macOS password dialog via `osascript`; no terminal needed.
-- **Bundles Electron 38 + the Next.js production server**. Locked to `127.0.0.1`; external links open in your default browser.
+- **Includes a guided first-run wizard** at `/onboarding` — checks each `wx-cli` prerequisite and offers one-click buttons for the automatable steps (`npm install -g @jackwener/wx-cli` and the first index). The privileged steps (`codesign` + `sudo wx init`) need Terminal on Sequoia — see the Caveats below.
+- **Bundles Electron 38 + the Next.js production server** — universal-merged, ad-hoc signed (no hardened runtime, no team ID), locked to `127.0.0.1`; external links open in your default browser.
 
 Launch like any other app:
 
@@ -68,11 +68,12 @@ open "release/mac-universal/WeChat Explorer.app"
 # or drag into /Applications and double-click
 ```
 
-Caveats:
+### Caveats — read before downloading the `.dmg`
 
-- **Unsigned bundle** — macOS Gatekeeper blocks unknown developers. First launch: right-click → Open, or allow under **Settings → Privacy & Security → "Open Anyway"**. (Trust your own builds; don't curl-pipe-bash someone else's `.app`.)
-- **`wx-cli` is still the prerequisite** — it can't be bundled (needs `sudo` to attach to WeChat's process), but the in-app wizard now installs and initialises it for you. Same end state as `npm install -g @jackwener/wx-cli && sudo wx init`, but driven from buttons.
-- **Data path is the same as the web version**: `~/.wechat-explorer/index.db`. Override with `WE_DATA_DIR=<path>` set in the environment before launching.
+- **First launch on Sequoia 15.x**: the bundle is ad-hoc signed (no paid Apple Developer ID), so Gatekeeper blocks the first launch with *"Apple could not verify…"* and no Open button in the dialog. Path through: dismiss the dialog → **System Settings → Privacy & Security → "Open Anyway"** at the bottom. One-time per install. On Sonoma 14.x and earlier, right-click the icon → **Open** works the same way. Don't grant this trust to a `.app` you didn't build or download from a source you fully trust.
+- **`wx-cli` is still required**. The wizard handles `npm install -g @jackwener/wx-cli` and the first index. The two `sudo` steps — re-signing `/Applications/WeChat.app` and `sudo wx init` — should be run from **Terminal**, not the wizard, on Sequoia: macOS's App Management privacy gate refuses to let any non-notarized app modify other installed apps even via `osascript ... with administrator privileges`. The wizard will show a copy-paste-able Terminal recipe when it detects this case (v0.1.3+); for v0.1.2 see [TROUBLESHOOTING.md](TROUBLESHOOTING.md#wizards-re-sign-wechat-step-fails-with-operation-not-permitted).
+- **Two indexing stages**: the wizard's "Build first index" runs **Quick index** only (~20 s — session list + contacts + bulk link messages). To populate per-chat message bodies, reply-latency, vocabulary diffs, recap, etc., open **Settings → Reindex → Deep index** afterwards. 20-40 min on first run; incremental after. Until then the Contacts table will show "0 messages" everywhere — that's expected.
+- **Data lives at** `~/.wechat-explorer/index.db` (override with `WE_DATA_DIR=<path>` in the env before launching).
 - For UI iteration without re-bundling, `npm run app:dev` opens the Electron window pointed at an already-running `npm run dev`.
 - To regenerate the icon: edit `build/icon.svg`, then `bash scripts/build-icon.sh` (the build script auto-runs this when the SVG is newer than the `.icns`).
 
