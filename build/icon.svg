@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WeChat Explorer app icon.
+  Distinct from WeChat's two-bubble logo: a single rounded chat bubble in
+  emerald with internal bar-chart strokes (chat + analytics). The macOS-
+  style squircle background and soft inner shadow keep it visually at home
+  in the Dock without aping any other app.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- Subtle vertical gradient on the bubble for depth -->
+    <linearGradient id="bubbleGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#34D399" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+    <!-- Inner shadow / vignette on the squircle -->
+    <radialGradient id="bgGrad" cx="50%" cy="35%" r="75%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#F1F5F9" />
+    </radialGradient>
+    <filter id="bubbleShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="14" />
+      <feOffset dx="0" dy="10" result="offsetblur" />
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.18" />
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- macOS squircle background (rx ≈ 22.37% of canvas) -->
+  <rect x="0" y="0" width="1024" height="1024" rx="229" ry="229" fill="url(#bgGrad)" />
+
+  <!-- Chat bubble: rounded rect with a tail. Centered ~190..834 horizontally,
+       170..680 vertically. Tail anchored bottom-left. -->
+  <g filter="url(#bubbleShadow)">
+    <path
+      d="
+        M 230 200
+        Q 200 200 200 230
+        L 200 580
+        Q 200 610 230 610
+        L 360 610
+        L 320 720
+        Q 310 740 330 730
+        L 480 610
+        L 794 610
+        Q 824 610 824 580
+        L 824 230
+        Q 824 200 794 200
+        Z"
+      fill="url(#bubbleGrad)"
+    />
+  </g>
+
+  <!-- Tiny bar-chart inside the bubble — three rounded white bars of
+       different heights, evoking "chat + stats". -->
+  <g fill="#FFFFFF" opacity="0.96">
+    <rect x="335" y="450" width="80" height="100" rx="20" />
+    <rect x="465" y="380" width="80" height="170" rx="20" />
+    <rect x="595" y="305" width="80" height="245" rx="20" />
+  </g>
+
+  <!-- Faint baseline under the bars for "chart" reading -->
+  <rect x="335" y="555" width="340" height="6" rx="3" fill="#FFFFFF" opacity="0.35" />
+</svg>

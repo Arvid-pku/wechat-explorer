@@ -17,8 +17,11 @@
 /.next/
 /out/
 
-# production
-/build
+# production — ignore /build/* contents but keep the icon source files
+# (they're build INPUTS for electron-builder, not generated output)
+/build/*
+!/build/icon.svg
+!/build/icon.icns
 
 # misc
 .DS_Store
